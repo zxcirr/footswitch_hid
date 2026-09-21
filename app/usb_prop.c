@@ -35,6 +35,7 @@
 #include "usb_desc.h"
 #include "usb_pwr.h"
 #include "usb_app.h"
+#include "cmd.h"
 
 
 /* Private typedef -----------------------------------------------------------*/ 
@@ -47,6 +48,15 @@ __IO uint8_t Request = 0;
 uint8_t Report_Buf[8];               /* current 8-byte keyboard input report */
 uint8_t OutReport_Buf[1];            /* LED output report (ACKed, unused) */
 __IO uint8_t USB_Configured = 0;     /* set by SET_CONFIGURATION */
+
+/* Feature-report command channel (cmd.h) -----------------------------------*/
+static uint8_t  cmd_buf[CMD_FEATURE_LEN];      /* Feature OUT payload (written by DataStageOut ISR) */
+static uint8_t  resp_buf[CMD_FEATURE_LEN];     /* current published response */
+static uint8_t  resp_snap[CMD_FEATURE_LEN];    /* per-transfer snapshot */
+volatile uint8_t resp_len;                     /* valid bytes in resp_buf (never 0 after init) */
+static volatile uint8_t resp_snap_len;         /* latched for the in-flight GET */
+static volatile uint8_t feature_cmd_pending;   /* set when a Feature SET is armed, cleared in Status_In */
+volatile uint8_t feature_save_pending;         /* set by Status_In when cmd_handle() returned 1; serviced by main */
 /* -------------------------------------------------------------------------- */
 /*  Structures initializations */
 /* -------------------------------------------------------------------------- */
@@ -128,6 +138,47 @@ uint8_t *CustomHID_GetReport(uint16_t Length);
 /* Private functions ---------------------------------------------------------*/
 
 /*******************************************************************************
+* Function Name  : usb_feature_publish.
+* Description    : Publish the Feature-report response returned by the next
+*                  GET_REPORT(Feature).  Up to CMD_FEATURE_LEN bytes of msg are
+*                  copied and NUL-padded; the published length is always >= 1
+*                  (a zero-length IN reply makes the stack STALL the request).
+*                  IRQs are masked while resp_buf/resp_len are updated, so it
+*                  is safe from both the USB interrupt and the main loop.
+* Input          : msg - NUL-terminated string (NULL publishes an empty reply).
+* Output         : None.
+* Return         : None.
+*******************************************************************************/
+void usb_feature_publish(const char *msg)
+{
+  uint8_t len = 0;
+  uint8_t i;
+
+  if (msg != NULL)
+  {
+    while ((len < CMD_FEATURE_LEN) && (msg[len] != '\0'))
+    {
+      len++;
+    }
+  }
+
+  __disable_irq();
+  for (i = 0; i < CMD_FEATURE_LEN; i++)
+  {
+    if (i < len)
+    {
+      resp_buf[i] = (uint8_t)msg[i];
+    }
+    else
+    {
+      resp_buf[i] = 0;
+    }
+  }
+  resp_len = (len != 0) ? len : 1;
+  __enable_irq();
+}
+
+/*******************************************************************************
 * Function Name  : CustomHID_init.
 * Description    : Custom HID init routine.
 * Input          : None.
@@ -139,7 +190,11 @@ void CustomHID_init(void)
   /* Update the serial number string descriptor with the data from the unique 
   ID*/
   Get_SerialNum();
-    
+
+  /* Publish a placeholder so an early GET_REPORT(Feature) never returns zero
+  bytes (the library turns a zero-length IN reply into a STALL) */
+  usb_feature_publish("OK ready\n");
+
   pInformation->Current_Configuration = 0;
   /* Connect the device */
   PowerOn();
@@ -227,6 +282,20 @@ void CustomHID_Status_In(void)
 {  
   BitAction Led_State;
   
+  if (feature_cmd_pending != 0)
+  {
+    /* A Feature SET just finished: cmd_buf now holds the request. */
+    uint8_t reply[CMD_FEATURE_LEN];
+
+    feature_cmd_pending = 0;
+    if (cmd_handle(cmd_buf, reply) != 0)   /* 1 = SAVE requested */
+    {
+      feature_save_pending = 1;            /* serviced by the main loop */
+    }
+    usb_feature_publish((const char *)reply);
+    return;
+  }
+
   if (Report_Buf[1] == 0)
   {
     Led_State = Bit_RESET;
@@ -372,6 +441,28 @@ RESULT CustomHID_Data_Setup(uint8_t RequestNo)
 *******************************************************************************/
 uint8_t *CustomHID_SetReport_Feature(uint16_t Length)
 {
+  if (pInformation->USBwValue1 == 3)          /* Feature report = command channel */
+  {
+    if (Length == 0)
+    {
+      uint16_t n = pInformation->USBwLength;
+      if (n > CMD_FEATURE_LEN)
+      {
+        n = CMD_FEATURE_LEN;
+      }
+      if (n == 0)
+      {
+        n = CMD_FEATURE_LEN;                  /* never arm a zero-length OUT */
+      }
+      pInformation->Ctrl_Info.Usb_wLength = n; /* receive length = SETUP wLength */
+      pInformation->Ctrl_Info.PacketSize  = Device_Property.MaxPacketSize;
+      feature_cmd_pending = 1;
+      return NULL;
+    }
+    return cmd_buf;
+  }
+
+  /* else: legacy 1-byte LED Output report */
   if (Length == 0)
   {
     pInformation->Ctrl_Info.Usb_wLength = 1;   /* LED output report: 1 byte */
@@ -485,6 +576,29 @@ uint8_t *CustomHID_GetHIDDescriptor(uint16_t Length)
 *******************************************************************************/
 uint8_t *CustomHID_GetReport(uint16_t Length)
 {
+  if (pInformation->USBwValue1 == 3)          /* Feature: config response */
+  {
+    if (Length == 0)
+    {
+      uint8_t i;
+
+      /* Latch length and data from the same publish: resp_buf may change
+      between the two CopyData() calls of one transfer */
+      __disable_irq();
+      for (i = 0; i < CMD_FEATURE_LEN; i++)
+      {
+        resp_snap[i] = resp_buf[i];
+      }
+      resp_snap_len = (resp_len != 0) ? resp_len : 1;
+      __enable_irq();
+
+      pInformation->Ctrl_Info.Usb_wLength = resp_snap_len;
+      return NULL;
+    }
+    return resp_snap;
+  }
+
+  /* else: 8-byte keyboard Input report */
   if (Length == 0)
   {
     pInformation->Ctrl_Info.Usb_wLength = 8;

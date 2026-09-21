@@ -63,10 +63,13 @@ uint8_t *CustomHID_GetProtocolValue(uint16_t Length);
 uint8_t *CustomHID_GetReportDescriptor(uint16_t Length);
 uint8_t *CustomHID_GetHIDDescriptor(uint16_t Length);
 uint8_t *CustomHID_GetReport(uint16_t Length);
+void usb_feature_publish(const char *msg);
 
 /* Exported variables --------------------------------------------------------*/
 extern __IO uint8_t USB_Configured;   /* set by SET_CONFIGURATION */
 extern uint8_t Report_Buf[8];         /* current keyboard input report */
+extern volatile uint8_t resp_len;             /* valid bytes in the published Feature response */
+extern volatile uint8_t feature_save_pending; /* set by Status_In when a SAVE was requested */
 
 
 /* Exported define -----------------------------------------------------------*/
