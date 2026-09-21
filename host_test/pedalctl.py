@@ -15,9 +15,15 @@ Protocol / 协议
         RESET              ->  "OK RESET"
         INFO               ->  "OK INFO ..."
         errors start with "ERR".
+    A command is successful ONLY when the reply matches that exact expected
+    text (case-insensitive).  Stale buffer text from an earlier command is
+    never accepted: the tool exits 2 and asks the user to re-check the device
+    with --probe.
     HID Get/Set_Report(Feature): wValue=0x0300, wIndex=interface 0, wLength=48.
-    hidapi buffers include a leading report-ID byte, so 49-byte buffers are used
-    and a leading 0x00 is stripped from responses.
+    hidapi/hidraw buffers include a leading report-ID byte, so 49-byte buffers
+    are used and a leading 0x00 is stripped from responses; the payload is
+    NUL-padded and the command text must stay <= 47 characters (the device
+    clamps the received length to 48).
 
 Opening strategy / 打开策略
     1) If the OPTIONAL `import hid` (cython-hidapi / PyPI `hid`) succeeds:
@@ -115,10 +121,15 @@ EPILOG = """\
 
 协议 / protocol:
   48 字节 ASCII Feature report 命令 (wValue=0x0300, wIndex=0, wLength=48);
-  hidapi/hidraw 缓冲带首字节 report ID, 因此实际使用 49 字节。
+  hidapi/hidraw 缓冲带首字节 report ID, 因此实际使用 49 字节; 负载需 NUL 填充,
+  命令文本最多 47 个字符 (设备把收到的长度截断到 48)。
   响应为 48 字节 ASCII, NUL 填充。save/get 会自动轮询 (约 8 次 x 250ms)。
+  成功判定是严格的: 应答必须与请求语义匹配 (如 SET 必须回 "OK SET n=0xNN"),
+  收到旧命令的残留文本不会被当作成功 (退出码 2)。
 
-退出码 / exit codes: 0=OK, 1=设备返回 ERR, 2=设备/传输失败 (device/transport failure)
+退出码 / exit codes: 0=应答与请求匹配, 1=设备返回 ERR, 2=应答缺失/不符(stale)或传输失败
+  (0=reply matches the request, 1=device returned ERR, 2=no/stale reply or transport
+  failure; 请用 --probe 复查设备 / re-check the device with --probe)
 
 macOS 注意 / macOS caveat:
   厂商 (0xFF00) Feature 集合与 boot keyboard 共用同一个 USB 接口, macOS 上 hidapi
@@ -130,9 +141,24 @@ macOS 注意 / macOS caveat:
     3) 使用厂商集合独立接口的固件版本 / use the separate-interface firmware variant.
 """
 
+ERR_RE = re.compile(r"^ERR\b", re.IGNORECASE)
+RESET_OK_RE = re.compile(r"^OK\s+RESET\b", re.IGNORECASE)
+INFO_OK_RE = re.compile(r"^OK\s+INFO\b", re.IGNORECASE)
+SAVED_RE = re.compile(r"^OK\s+saved\b", re.IGNORECASE)
 MAP_RE = re.compile(
-    r"^OK\s+MAP\s+(0x[0-9A-Fa-f]{2})\s+(0x[0-9A-Fa-f]{2})\s+(0x[0-9A-Fa-f]{2})\s*$"
+    r"^OK\s+MAP\s+(0x[0-9A-Fa-f]{2})\s+(0x[0-9A-Fa-f]{2})\s+(0x[0-9A-Fa-f]{2})\b",
+    re.IGNORECASE,
 )
+
+
+def set_ok_re(pedal: int, value: int):
+    """Reply that uniquely confirms `SET <pedal> 0xNN` was applied.
+
+    The pedal index and the canonical upper-case 2-digit code are both pinned
+    to what was requested, so a stale "OK SET ..." from a previous command can
+    never be mistaken for success.
+    """
+    return re.compile(r"^OK\s+SET\s+%d=0x%02X\b" % (pedal, value), re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,13 +229,16 @@ def decode_text(data) -> str:
     return raw.split(b"\x00", 1)[0].decode("ascii", "replace").strip()
 
 
-def classify(text: str) -> int:
-    """Map a device response to an exit code: OK->0, ERR->1, anything->2."""
-    stripped = text.strip()
-    if stripped.startswith("OK"):
-        return 0
-    if stripped.startswith("ERR"):
-        return 1
+def unexpected_reply(text: str, expected: str) -> int:
+    """Exit 2 when the reply is not the exact expected text (stale/empty/other).
+
+    Never report success for text that only *looks* like an old OK reply.
+    """
+    print(_err("应答不符合预期 / unexpected reply: %s"
+               % (text if text else "(空 / empty)")))
+    print(_warn("期望 / expected: %s" % expected))
+    print(_warn("命令可能被丢弃或设备已掉线, 请用 `--probe` 重新确认设备状态 / the command may have "
+                "been dropped or the device went away; re-check the device with `--probe`"))
     return 2
 
 
@@ -461,29 +490,59 @@ def send_command(device, command: str, retries: int, delay: float, placeholder: 
 
 
 def command_simple(device, command: str, retries: int, delay: float):
+    """Send one command and return (raw, text); success judgement is the caller's."""
     placeholder = _current_buffer_text(device)
     raw, text = send_command(device, command, retries, delay, placeholder)
     show(raw, text)
-    return classify(text), raw, text
+    return raw, text
+
+
+def command_set(device, pedal: int, value: int, retries: int, delay: float) -> int:
+    _raw, text = command_simple(device, "SET %d 0x%02X" % (pedal, value), retries, delay)
+    if ERR_RE.match(text):
+        return 1
+    if set_ok_re(pedal, value).match(text):
+        return 0
+    return unexpected_reply(text, "OK SET %d=0x%02X" % (pedal, value))
+
+
+def command_reset(device, retries: int, delay: float) -> int:
+    _raw, text = command_simple(device, "RESET", retries, delay)
+    if ERR_RE.match(text):
+        return 1
+    if RESET_OK_RE.match(text):
+        return 0
+    return unexpected_reply(text, "OK RESET")
+
+
+def command_info(device, retries: int, delay: float) -> int:
+    _raw, text = command_simple(device, "INFO", retries, delay)
+    if ERR_RE.match(text):
+        return 1
+    if INFO_OK_RE.match(text):
+        return 0
+    return unexpected_reply(text, "OK INFO")
 
 
 def command_get(device, retries: int, delay: float) -> int:
-    code, raw, text = command_simple(device, "GET", retries, delay)
+    _raw, text = command_simple(device, "GET", retries, delay)
+    if ERR_RE.match(text):
+        return 1
     match = MAP_RE.match(text)
-    if match:
-        for index, value in enumerate(match.groups(), 1):
-            print("  踏板 %d / pedal %d -> %s" % (index, index, value))
-    return code
+    if not match:
+        return unexpected_reply(text, "OK MAP 0xNN 0xNN 0xNN")
+    for index, value in enumerate(match.groups(), 1):
+        print("  踏板 %d / pedal %d -> %s" % (index, index, value))
+    return 0
 
 
 def command_save(device, retries: int, delay: float) -> int:
     placeholder = _current_buffer_text(device)
     raw, text = send_command(device, "SAVE", retries, delay, placeholder)
     show(raw, text)
-    code = classify(text)
-    if code != 0:
-        return code
-    if "saved" in text.lower():
+    if ERR_RE.match(text):
+        return 1
+    if SAVED_RE.match(text):
         return 0
 
     # "OK saving" received: the device writes the config later; poll for "OK saved".
@@ -492,26 +551,33 @@ def command_save(device, retries: int, delay: float) -> int:
         time.sleep(max(0.0, delay))
         raw = normalize_response(device.get_feature())
         text = decode_text(raw)
-        if text.startswith("ERR"):
+        if ERR_RE.match(text):
             show(raw, text)
             return 1
-        if "saved" in text.lower():
+        if SAVED_RE.match(text):
             show(raw, text)
             return 0
-    print(_warn("未收到 `OK saved` 确认 (设备可能仍在写入) / no `OK saved` confirmation received"))
-    return 1
+    show(raw, text)
+    print(_err("等待 `OK saved` 超时 / timed out waiting for `OK saved`"))
+    print(_warn("设备可能仍在写入或已掉线, 请用 `--probe` 重新确认 / the device may still be writing or "
+                "went away; re-check the device with `--probe`"))
+    return 2
 
 
 def command_probe(device, retries: int, delay: float) -> int:
-    placeholder = _current_buffer_text(device)
-    raw, text = send_command(device, "INFO", min(retries, 4), delay, placeholder)
-    if text:
-        show(raw, text)
-        code = classify(text)
-        if code == 0:
-            print(_ok("设备在线 / device is reachable"))
-        return code
-    print(_err("设备已打开但 INFO 无响应 / device opened but did not answer the INFO command"))
+    _raw, text = command_simple(device, "INFO", min(retries, 4), delay)
+    if ERR_RE.match(text):
+        return 1
+    if INFO_OK_RE.match(text):
+        print(_ok("设备在线 / device is reachable"))
+        return 0
+    if not text:
+        print(_err("设备已打开但 INFO 无响应 / device opened but did not answer the INFO command"))
+    else:
+        print(_err("设备已打开但 INFO 应答无效 (疑似残留文本) / device opened but the INFO reply was "
+                   "not recognised (looks stale)"))
+    print(_warn("请用 `--list` 检查 hidraw 节点/权限, 或稍后重试 `--probe` / inspect nodes & permissions "
+                "with `--list`, then retry `--probe`"))
     return 2
 
 
@@ -591,19 +657,15 @@ def main(argv=None) -> int:
         if args.probe:
             return command_probe(device, args.retries, args.delay)
         if args.command == "set":
-            command_text = "SET %d 0x%02X" % (pedal, value)
-            code, _raw, _text = command_simple(device, command_text, args.retries, args.delay)
-            return code
+            return command_set(device, pedal, value, args.retries, args.delay)
         if args.command == "get":
             return command_get(device, args.retries, args.delay)
         if args.command == "save":
             return command_save(device, args.retries, args.delay)
         if args.command == "reset":
-            code, _raw, _text = command_simple(device, "RESET", args.retries, args.delay)
-            return code
+            return command_reset(device, args.retries, args.delay)
         if args.command == "info":
-            code, _raw, _text = command_simple(device, "INFO", args.retries, args.delay)
-            return code
+            return command_info(device, args.retries, args.delay)
         parser.print_help()
         return 2
     except OSError as exc:

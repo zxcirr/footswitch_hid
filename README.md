@@ -108,6 +108,12 @@ HID 描述符里的 `wDescriptorLength = 0x52`;键盘的 8 字节 Input 报告�
 命令字大小写不敏感,允许开头多一个 `0x00`、结尾带 `\n`;响应为 48 字节 ASCII、
 以 `\n` 结尾。
 
+**缓冲与长度约定(49 = report ID + 48)**:主机侧 hidapi/hidraw 的 Feature 缓冲首字节
+是 report ID(本设备为 `0x00`),所以工具实际收发按 **49 字节**处理:首字节 `0x00`
++ 48 字节负载。负载必须 NUL 填充,命令文本最多 **47 个字符**——设备端会把收到的
+长度截断为 48 字节,文本过长会丢尾部。`GET_REPORT(Feature)` 返回完整的 48 字节
+报告(文本后 NUL 填充),主机侧剥掉首字节 report ID 后即得到 ASCII 文本。
+
 | 命令 | 响应 |
 |---|---|
 | `SET <1-3> <0xNN>` | `OK SET <n>=0xNN\n` |
@@ -125,6 +131,9 @@ HID 描述符里的 `wDescriptorLength = 0x52`;键盘的 8 字节 Input 报告�
 | `0x04..0x65` | 普通键,进入键盘报告的 6 键数组 |
 | `0xE0..0xE7` | 修饰键,置位报告 byte 0 |
 | 其余 | `ERR range`(含 `0x68..0x73`;描述符声明的 Usage Max 是 `0x65`,这类键发不出去) |
+
+即 `cmd.h` 的完整合法集合为 `0x00 | 0x04..0x65 | 0xE0..0xE7`;`0x68..0x73`(F13–F24)
+虽属合法 HID 用法但会被**显式拒绝**(发不出去),其余值返回 `ERR range`。
 
 **持久化**:配置存在 **Flash 最后一页 `0x0800FC00`**,共 16 字节
 (magic / version / keymap / checksum)。启动时校验并加载,非法则回落默认值。
@@ -151,6 +160,10 @@ python3 host_test/pedalctl.py --list       # 列出 HID/hidraw 候选
 必须打开**厂商集合**(usage page `0xFF00`),不要打开键盘集合:Windows 下键盘
 TLC 被 `kbdhid` 独占,Linux 下每个接口对应一个 hidraw 节点;hidapi 缓冲带首字节
 report ID,所以实际收发按 49 字节处理。`save` / `get` 会自动轮询等待结果。
+成功判定是**严格语义匹配**:`set` 必须收到 `OK SET <n>=0xNN`(与请求一致)、
+`reset` 必须收到 `OK RESET`、`get` 必须收到 `OK MAP 0xNN 0xNN 0xNN`、`info`
+必须收到 `OK INFO`、`save` 必须收到 `OK saved`;读到旧命令的残留文本不会被当作
+成功,而是返回 2 并提示用 `--probe` 复查设备。
 
 Linux 读 `/dev/hidraw*` 需要权限:
 
@@ -210,13 +223,15 @@ footswitch_hid/
 
 ## 8. 已验证 / 待验证
 
-- [x] 编译零警告;Flash 占用约 5.7KB / 20KB SRAM 约 2.2KB
+- [x] 编译零警告;Flash 镜像 ≈ **8044 B**(text 7828 + data 216),RAM bss 2368 B
 - [x] 主机侧描述符校验 5/5 通过(`make test`,含 48B vendor Feature 集合)
 - [x] `cmd` 主机单测 ALL PASS(`gcc -std=c11 -Wall -Wextra -Wshadow -Iapp host_test/test_cmd.c app/cmd.c`,见 §5.5)
-- [x] SWD 实测:72MHz、USBEN、EP0R=0x3210、DADDR=0x80、NVIC IRQ20
+- [x] SWD 实测:72MHz、USBEN、EP0R=0x3210、DADDR=0x82、USB_Configured=1、NVIC IRQ20
+- [x] 真机 USB 枚举成功(主机已分配地址:SWD 读到 DADDR=0x82 / USB_Configured=1)
 - [x] SWD 注入模拟踩键:SW1/2/3 → 0x1E/0x1F/0x20,组合键同帧,消抖无重复
-- [ ] 真机 USB 枚举 + 真实开关按键(需插上板载 USB 并接好开关)
-- [ ] 真机 `set`/`get`/`save` 与断电持久化(待真机验收)
+- [x] SWD 验证的 C1 固件侧证据:运行时键位表驱动键盘报告(含修饰键/禁用行为);延迟 `SAVE` 写入配置页(magic `0x31474643`、keymap `1E 1F 20`、checksum `0x015F`);复位后 `cfg_load()` 恢复正常
+- [ ] 真实开关踩键(需接好三个开关)
+- [ ] 主机侧 Feature `set`/`get`/`save`(`host_test/pedalctl.py`)与断电持久化 — **待验证**
 
 ---
 
