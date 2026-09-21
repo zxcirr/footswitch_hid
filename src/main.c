@@ -11,7 +11,13 @@
 #include <stdint.h>
 
 #include "config.h"
+#include "cmd.h"
+#include "cfg.h"
 #include "usb_app.h"
+
+/* ===== 临界区 (与 CMSIS __disable_irq()/__enable_irq() 等价的 CPS 指令) ===== */
+#define __disable_irq()  __asm__ __volatile__ ("cpsid i" ::: "memory")
+#define __enable_irq()   __asm__ __volatile__ ("cpsie i" ::: "memory")
 
 /* ===== Cortex-M3 SysTick ===== */
 #define SYSTICK_CTRL    (*(volatile uint32_t *)0xE000E010)
@@ -62,7 +68,6 @@ static uint32_t key_flash_until_ms;       /* LED 按键闪亮截止时间 */
 typedef struct
 {
     uint8_t pin;        /* GPIOB 引脚号 */
-    uint8_t hid_code;   /* HID usage id */
     uint8_t stable;     /* 消抖后的状态: 1 = 按下 */
     uint8_t counter;    /* 积分计数 */
 } sw_state_t;
@@ -72,11 +77,8 @@ static sw_state_t sw[3];
 static void sw_init(void)
 {
     sw[0].pin = SW1_GPIO_PIN;
-    sw[0].hid_code = KEY1_HID_CODE;
     sw[1].pin = SW2_GPIO_PIN;
-    sw[1].hid_code = KEY2_HID_CODE;
     sw[2].pin = SW3_GPIO_PIN;
-    sw[2].hid_code = KEY3_HID_CODE;
 
     for (uint8_t i = 0; i < 3u; i++)
     {
@@ -183,10 +185,27 @@ int main(void)
     gpio_init();
     systick_init(72000u);      /* 72MHz / 72000 = 1ms */
     sw_init();
+    cmd_init();                /* 默认 0x1E/0x1F/0x20 */
+    (void)cfg_load();          /* 成功时经 cmd_set_keymap() 覆盖默认值 */
     usb_app_init();            /* 断开脉冲 + USB 协议栈启动 */
 
     for (;;)
     {
+        /* --- SAVE 服务: 擦写 flash 会阻塞取指 ~20-40ms, 只能在主循环执行 --- */
+        if (feature_save_pending != 0u)
+        {
+            feature_save_pending = 0u;
+            if (cfg_save() == 0u)
+            {
+                cmd_save_done();
+                usb_feature_publish("OK saved\n");
+            }
+            else
+            {
+                usb_feature_publish("ERR flash\n");
+            }
+        }
+
         uint32_t now = systick_ms;
         uint8_t report[HID_REPORT_LEN];
         uint8_t idx = 2u;
@@ -221,17 +240,39 @@ int main(void)
             }
         }
 
-        /* --- 组装 8 字节 boot keyboard 报告 --- */
+        /* --- 快照运行时键表: SET 命令可能在 USB 中断里改写 --- */
+        uint8_t km[CMD_KEY_COUNT];
+        __disable_irq();
+        for (uint8_t i = 0; i < CMD_KEY_COUNT; i++)
+        {
+            km[i] = cmd_keymap[i];
+        }
+        __enable_irq();
+
+        /* --- 组装 8 字节 boot keyboard 报告 (键码来自运行时键表) --- */
         for (uint8_t i = 0; i < HID_REPORT_LEN; i++)
         {
             report[i] = 0u;
         }
         for (uint8_t i = 0; i < 3u; i++)
         {
-            if ((sw[i].stable != 0u) && (idx < HID_REPORT_LEN))
+            if (sw[i].stable != 0u)
             {
-                report[idx] = sw[i].hid_code;
-                idx++;
+                uint8_t code = km[i];
+
+                if (code == 0x00u)
+                {
+                    continue;      /* 禁用的踏板不发键 */
+                }
+                if ((code >= 0xE0u) && (code <= 0xE7u))
+                {
+                    report[0] |= (uint8_t)(1u << (code - 0xE0u));   /* 修饰键 -> byte 0 */
+                }
+                else if (idx < HID_REPORT_LEN)
+                {
+                    report[idx] = code;                            /* 普通键 -> 6 键数组 */
+                    idx++;
+                }
             }
         }
 

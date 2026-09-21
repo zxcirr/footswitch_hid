@@ -24,4 +24,11 @@ uint8_t usb_app_is_configured(void);
 /* 1 while an EP1 IN transfer is in flight. */
 uint8_t usb_app_is_busy(void);
 
+/* Publish a Feature-report response (defined in usb_prop.c).  Main loop only. */
+void usb_feature_publish(const char *msg);
+
+/* Set by the USB ISR when the host sent SAVE; serviced by the main loop,
+ * which performs the (flash-stalling) write and publishes the reply. */
+extern volatile uint8_t feature_save_pending;
+
 #endif /* USB_APP_H */

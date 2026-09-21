@@ -43,6 +43,7 @@
 /* ============================================================
  * HID boot keyboard 键码 (HID Usage Tables, Keyboard/Keypad page 0x07)
  * ============================================================ */
+/* 默认键码 (文档默认值); 运行时键表在 app/cmd.c, 由 cmd_init() 初始化 */
 #define KEY1_HID_CODE           0x1E            /* '1' */
 #define KEY2_HID_CODE           0x1F            /* '2' */
 #define KEY3_HID_CODE           0x20            /* '3' */
