@@ -90,18 +90,92 @@ make clean
 键码见 HID Usage Tables (Keyboard/Keypad page 0x07)。若同时要按 4 个以上按键,
 6KRO boot 报告上限为 6 键。
 
+## 5.5 在线改键(HID Feature 报告命令通道)
+
+不重新编译也能改键:主机通过**一个 HID Feature 报告**(48 字节)读写运行时键位表,
+内容是 ASCII 命令行。该通道与 boot 键盘**共用同一个 USB 接口**,无 report ID、
+不增加端点。报告描述符在键盘集合之后追加了一个厂商集合(Usage Page `0xFF00`、
+Usage `0x01`、Feature 8 bits × 48),因此描述符从 63 字节变为 **82 字节**,
+HID 描述符里的 `wDescriptorLength = 0x52`;键盘的 8 字节 Input 报告与
+1 字节 LED Output 报告均不变。
+
+| 方向 | `bmRequestType` | `bRequest` | `wValue` | `wIndex` | `wLength` |
+|---|---|---|---|---|---|
+| Get_Report | `0xA1` | `0x01` | `0x0300` | 0 | 48 |
+| Set_Report | `0x21` | `0x09` | `0x0300` | 0 | 48 |
+
+`wValue` 高字节 3 = Feature,低字节 0 = report ID。请求为 ASCII、NUL 填充,
+命令字大小写不敏感,允许开头多一个 `0x00`、结尾带 `\n`;响应为 48 字节 ASCII、
+以 `\n` 结尾。
+
+| 命令 | 响应 |
+|---|---|
+| `SET <1-3> <0xNN>` | `OK SET <n>=0xNN\n` |
+| `GET` | `OK MAP 0xNN 0xNN 0xNN\n` |
+| `SAVE` | 先 `OK saving\n`,Flash 写完后为 `OK saved\n`(失败 `ERR flash\n`) |
+| `RESET` | `OK RESET\n`(恢复默认 1/2/3,需再 `SAVE` 才持久化) |
+| `INFO` | `OK INFO fw=1.0 keys=0xNN,0xNN,0xNN dirty=<0\|1>\n` |
+| 其它 | `ERR unknown\n` / `ERR syntax\n` / `ERR pedal\n` / `ERR range\n` |
+
+`SET` 的键码规则:
+
+| 取值 | 含义 |
+|---|---|
+| `0x00` | 禁用,该踏板不输出任何按键 |
+| `0x04..0x65` | 普通键,进入键盘报告的 6 键数组 |
+| `0xE0..0xE7` | 修饰键,置位报告 byte 0 |
+| 其余 | `ERR range`(含 `0x68..0x73`;描述符声明的 Usage Max 是 `0x65`,这类键发不出去) |
+
+**持久化**:配置存在 **Flash 最后一页 `0x0800FC00`**,共 16 字节
+(magic / version / keymap / checksum)。启动时校验并加载,非法则回落默认值。
+`SAVE` 才写 Flash,`RESET` 只改 RAM;`make flash -e sector` **保留**该页,
+`make flash -e chip`(或 `pyocd flash -e chip`)**会擦掉**它,配置随之回到默认。
+
+> 报告描述符变了,所以**烧录新固件后需要重新插拔一次 USB**(重新枚举);
+> 之后在线改键**不需要**再重新枚举。
+> BIOS/UEFI 走 boot 协议时只认键盘 Input 报告,Feature 报告在 boot 协议下未定义,
+> 不影响开机打字。
+
+**主机工具 `host_test/pedalctl.py`**(hidapi 优先,缺库时回退 `/dev/hidraw` 原始 ioctl):
+
+```bash
+python3 host_test/pedalctl.py set 1 0x2C   # 踏板1 -> 0x2C(需再 save 才持久化)
+python3 host_test/pedalctl.py get          # 读当前映射
+python3 host_test/pedalctl.py save         # 写入 Flash
+python3 host_test/pedalctl.py reset        # 恢复默认
+python3 host_test/pedalctl.py info         # 固件/键位/dirty 状态
+python3 host_test/pedalctl.py --probe      # 设备是否在线
+python3 host_test/pedalctl.py --list       # 列出 HID/hidraw 候选
+```
+
+必须打开**厂商集合**(usage page `0xFF00`),不要打开键盘集合:Windows 下键盘
+TLC 被 `kbdhid` 独占,Linux 下每个接口对应一个 hidraw 节点;hidapi 缓冲带首字节
+report ID,所以实际收发按 49 字节处理。`save` / `get` 会自动轮询等待结果。
+
+Linux 读 `/dev/hidraw*` 需要权限:
+
+```bash
+sudo usermod -aG input $USER      # 一次性;之后重新登录生效
+```
+
+**macOS** 上厂商集合与键盘同接口,hidapi 默认独占打开,抢占键盘设备需要 root,
+三种办法任选:用 PyPI `hidapi` 绑定并先调 `hid_darwin_set_open_exclusive(0)`、
+以 root 运行、或改用厂商集合独立接口的固件变体。
+
 ## 6. 目录结构
 
 ```
 footswitch_hid/
 ├── src/                自研源码
-│   ├── main.c            应用主循环:时钟/GPIO/1ms SysTick/消抖/报告组装/LED
+│   ├── main.c            应用主循环:时钟/GPIO/1ms SysTick/消抖/报告组装/LED/Feature 命令与配置加载
 │   ├── config.h          引脚、键码、时序(改这里即可)
 │   ├── startup.s         向量表(含 USB IRQ20/42 弱符号,来自 demo/)
 │   └── linker.ld         64K Flash / 20K SRAM
 ├── app/                应用层(由 ST Custom_HID 例程改写为键盘)
-│   ├── usb_desc.c/h      设备/配置/HID/报告描述符(63 字节 boot 键盘)
-│   ├── usb_prop.c/h      SETUP 处理:标准请求 + HID 类请求(SET_IDLE/GET_REPORT...)
+│   ├── usb_desc.c/h      设备/配置/HID/报告描述符(82 字节:键盘 + 厂商 Feature 集合)
+│   ├── usb_prop.c/h      SETUP 处理:标准请求 + HID 类请求(SET_IDLE / GET_REPORT / Feature 命令)
+│   ├── cmd.c/h           命令解析 + 运行时键位表(可主机单测,见 §5.5)
+│   ├── cfg.h/cfg_flash.c Flash 持久化:最后一页 0x0800FC00 的 16 字节配置
 │   ├── usb_endp.c        EP1 IN 完成回调
 │   ├── usb_istr.c/h      USB 中断分发 + IRQ20/42 入口
 │   ├── usb_pwr.c/h       上电/挂起管理(已禁用 STOP 低功耗,见 §7)
@@ -112,7 +186,12 @@ footswitch_hid/
 ├── lib/                第三方代码(原样引入,勿改)
 │   ├── st_usbfs/         ST 官方 USB FS 设备库 V4.0.0(inc/ + src/)
 │   └── cmsis/            stm32f10x.h / core_cm3 / system_stm32f10x
-├── host_test/          主机侧测试:test_descriptors.py / evdev_read.py / qa_e2e.py
+├── host_test/          主机侧测试与工具
+│   ├── test_descriptors.py 描述符校验(make test,5 项)
+│   ├── test_cmd.c          cmd 命令解析主机单测(见 §5.5)
+│   ├── pedalctl.py         在线改键工具(见 §5.5)
+│   ├── evdev_read.py       按键事件抓取
+│   └── qa_e2e.py           端到端验收
 ├── Makefile            构建与烧录(make / make flash / make test)
 ├── README.md
 └── .gitignore
@@ -132,10 +211,12 @@ footswitch_hid/
 ## 8. 已验证 / 待验证
 
 - [x] 编译零警告;Flash 占用约 5.7KB / 20KB SRAM 约 2.2KB
-- [x] 主机侧描述符校验 4/4 通过(`make test`)
+- [x] 主机侧描述符校验 5/5 通过(`make test`,含 48B vendor Feature 集合)
+- [x] `cmd` 主机单测 ALL PASS(`gcc -std=c11 -Wall -Wextra -Wshadow -Iapp host_test/test_cmd.c app/cmd.c`,见 §5.5)
 - [x] SWD 实测:72MHz、USBEN、EP0R=0x3210、DADDR=0x80、NVIC IRQ20
 - [x] SWD 注入模拟踩键:SW1/2/3 → 0x1E/0x1F/0x20,组合键同帧,消抖无重复
 - [ ] 真机 USB 枚举 + 真实开关按键(需插上板载 USB 并接好开关)
+- [ ] 真机 `set`/`get`/`save` 与断电持久化(待真机验收)
 
 ---
 
