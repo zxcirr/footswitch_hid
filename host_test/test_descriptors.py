@@ -21,6 +21,11 @@ them against the boot-keyboard requirements:
                 Input item, 64 input bits (byte aligned), last item
                 End Collection, collections balanced; length must match the
                 HID descriptor's wDescriptorLength.
+  vendor_feature : report descriptor declares a 48-byte vendor-defined
+                Feature report: an Application collection (0xA1 0x01) with
+                Usage Page 0xFF00 / Usage 0x01 containing a Feature main
+                item (0xB1) with Report Size 8, Report Count 48 (384 bits)
+                and the Data flag (bit0) set.
   keymap      : config.h defines PB9/PB8/PB7 and HID codes 0x1E/0x1F/0x20.
 
 Stdlib only. Runnable from any cwd. Exit 0 iff every check passes.
@@ -39,7 +44,7 @@ ARRAY_RE = re.compile(
     re.S,
 )
 
-N_CHECKS = 4  # device_desc, config_desc, report_desc, keymap
+N_CHECKS = 5  # device_desc, config_desc, report_desc, vendor_feature, keymap
 
 
 def strip_comments(text):
@@ -399,6 +404,86 @@ def check_report_desc(arrays, hid_report_length):
         name, len(arr), len(items)), {}
 
 
+# ------------------------------------------------------------ vendor_feature
+
+TAG_FEATURE = 0xB
+VENDOR_USAGE_PAGE = 0xFF00
+VENDOR_USAGE = 0x01
+VENDOR_FEATURE_FLAGS = 0x02
+
+
+def check_vendor_feature(arrays):
+    arr = find_array(arrays, "report", "descriptor")
+    if arr is None:
+        return False, "no uint8_t array named *Report*Descriptor* found", {}
+    name = arr.name
+    if None in arr.values:
+        bad = [r for r, v in zip(arr.raws, arr.values) if v is None]
+        return False, "%s: non-numeric tokens %s" % (name, bad), {}
+    try:
+        items = parse_hid_items(arr.values)
+    except ValueError as exc:
+        return False, "%s: item parse error: %s" % (name, exc), {}
+
+    problems = []
+    usage_page = usage = None
+    report_size = report_count = 0
+    depth = 0
+    vendor_app_depth = None
+    saw_vendor_app = False
+    feature = None
+    for off, btag, btype, value, prefix in items:
+        if btype == BTYPE_GLOBAL:
+            if btag == TAG_USAGE_PAGE:
+                usage_page = value
+            elif btag == TAG_REPORT_SIZE:
+                report_size = value
+            elif btag == TAG_REPORT_COUNT:
+                report_count = value
+        elif btype == BTYPE_LOCAL:
+            if btag == TAG_USAGE:
+                usage = value
+        elif btype == BTYPE_MAIN:
+            if btag == TAG_COLLECTION:
+                depth += 1
+                if (value == 0x01 and usage_page == VENDOR_USAGE_PAGE
+                        and usage == VENDOR_USAGE):
+                    saw_vendor_app = True
+                    if vendor_app_depth is None:
+                        vendor_app_depth = depth
+            elif btag == TAG_END_COLLECTION:
+                if vendor_app_depth is not None and depth == vendor_app_depth:
+                    vendor_app_depth = None
+                depth -= 1
+                if depth < 0:
+                    depth = 0
+            elif (btag == TAG_FEATURE and vendor_app_depth is not None
+                    and depth >= vendor_app_depth and feature is None):
+                feature = (off, report_size, report_count, value)
+
+    if not saw_vendor_app:
+        problems.append(
+            "no Application collection (0xA1 0x01) with Usage Page 0xFF00 / Usage 0x01")
+    if feature is None:
+        problems.append(
+            "no Feature item (0xB1) inside the 0xFF00/0x01 Application collection")
+    else:
+        off, fsize, fcount, flags = feature
+        if fsize != 8:
+            problems.append("Feature Report Size=%d want 8 at offset %d" % (fsize, off))
+        if fcount != 48:
+            problems.append("Feature Report Count=%d want 48 at offset %d" % (fcount, off))
+        if not (flags & 0x01 or flags == VENDOR_FEATURE_FLAGS):
+            problems.append(
+                "Feature flags=0x%02X want Data (bit0 set, 0x02 accepted) at offset %d"
+                % (flags, off))
+
+    if problems:
+        return False, "%s[%d]: %s" % (name, len(arr), "; ".join(problems)), {}
+    return True, ("%s[%d]: vendor Feature report, Usage Page 0xFF00 / Usage 0x01, "
+                  "8 bits x 48 = 48 bytes" % (name, len(arr))), {}
+
+
 # --------------------------------------------------------------------- keymap
 
 def has_pin(text, pin):
@@ -454,6 +539,9 @@ def main():
 
     ok, detail, _ = check_report_desc(arrays, extra.get("hid_report_length"))
     record("report_desc", ok, detail)
+
+    ok, detail, _ = check_vendor_feature(arrays)
+    record("vendor_feature", ok, detail)
 
     ok, detail, _ = check_keymap()
     record("keymap", ok, detail)
