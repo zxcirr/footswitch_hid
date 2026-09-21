@@ -1,0 +1,72 @@
+/**
+  ******************************************************************************
+  * @file    usb_desc.c
+  * @brief   USB HID boot-keyboard descriptor set.
+  *
+  * Derived from ST's STM32_USB-FS-Device_Lib V4.0.0 Custom_HID example and
+  * rewritten for a 3-key footswitch keyboard:
+  *   - VID:PID = 0x1209:0x0001 (pid.codes open-source VID; change freely)
+  *   - 1 interface, boot keyboard (class 3 / subclass 1 / protocol 1)
+  *   - 1 interrupt IN endpoint (0x81, 8 bytes, 1 ms interval)
+  *   - no string descriptors referenced (indices 0) -> minimal enumeration
+  ******************************************************************************
+  */
+
+#include "usb_lib.h"
+#include "usb_desc.h"
+
+/* USB Standard Device Descriptor */
+const uint8_t CustomHID_DeviceDescriptor[CUSTOMHID_SIZ_DEVICE_DESC] =
+{
+  0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x40,
+  0x09, 0x12, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+  0x00, 0x01
+};
+
+/* Configuration set (34 bytes): config(9) + interface(9) + HID(9) + EP(7) */
+const uint8_t CustomHID_ConfigDescriptor[CUSTOMHID_SIZ_CONFIG_DESC] =
+{
+  /* Configuration: wTotalLength=34, 1 interface, bus powered, 100 mA */
+  0x09, 0x02, 0x22, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32,
+  /* Interface: boot keyboard, 1 endpoint */
+  0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00,
+  /* HID: bcdHID 1.11, one report descriptor (type 0x22, 63 bytes) */
+  0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3F, 0x00,
+  /* Endpoint: EP1 IN, interrupt, 8 bytes, 1 ms */
+  0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x01
+};
+
+/* HID Report Descriptor: canonical boot keyboard (HID 1.11 Appendix B.1).
+ * 8-byte input report: modifier byte, reserved byte, 6 key codes. */
+const uint8_t CustomHID_ReportDescriptor[CUSTOMHID_SIZ_REPORT_DESC] =
+{
+  0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07,
+  0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01,
+  0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01,
+  0x75, 0x08, 0x81, 0x01, 0x95, 0x05, 0x75, 0x01,
+  0x05, 0x08, 0x19, 0x01, 0x29, 0x05, 0x91, 0x02,
+  0x95, 0x01, 0x75, 0x03, 0x91, 0x01, 0x95, 0x06,
+  0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07,
+  0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0
+};
+
+/* String descriptors: kept minimal, none referenced by the device descriptor */
+const uint8_t CustomHID_StringLangID[CUSTOMHID_SIZ_STRING_LANGID] =
+{
+  0x04, 0x03, 0x09, 0x04
+};
+
+const uint8_t CustomHID_StringVendor[CUSTOMHID_SIZ_STRING_VENDOR] =
+{
+  0x02, 0x03
+};
+
+const uint8_t CustomHID_StringProduct[CUSTOMHID_SIZ_STRING_PRODUCT] =
+{
+  0x02, 0x03
+};
+
+uint8_t CustomHID_StringSerial[CUSTOMHID_SIZ_STRING_SERIAL] =
+{
+  0x02, 0x03
+};
