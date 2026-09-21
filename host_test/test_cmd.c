@@ -213,6 +213,28 @@ int main(void)
         CHECK(map_is(0xE0, 0x2C, 0x20), "malformed batch: keymap untouched");
     }
 
+    /* -------- 9b. key-code boundaries: 0xFF / 0x68 / 0x73 are ERR range -- */
+    (void)run("SET 1 0xFF", resp);
+    CHECK(starts_with(resp, "ERR range"), "SET 1 0xFF: rejected as out of range");
+    (void)run("SET 1 0x68", resp);
+    CHECK(starts_with(resp, "ERR range"), "SET 1 0x68: F13-F24 hole lower edge rejected");
+    (void)run("SET 1 0x73", resp);
+    CHECK(starts_with(resp, "ERR range"), "SET 1 0x73: F13-F24 hole upper edge rejected");
+    CHECK(map_is(0xE0, 0x2C, 0x20), "range boundaries: keymap untouched");
+
+    /* -------- 9c. oversized request: all 48 bytes non-NUL garbage --------- */
+    {
+        uint8_t bad_in[CMD_FEATURE_LEN];
+
+        memset(bad_in, 'A', sizeof bad_in);
+        memset(out, 0xAA, sizeof out);
+        (void)cmd_handle(bad_in, out);
+        resp_str(out, resp);
+        CHECK(starts_with(resp, "ERR unknown") || starts_with(resp, "ERR syntax"),
+              "48x'A': garbage request rejected");
+        CHECK(map_is(0xE0, 0x2C, 0x20), "48x'A': keymap untouched");
+    }
+
     /* -------- 10. GET ---------------------------------------------------- */
     memset(out, 0xAA, sizeof out);
     req_str(in, "GET");
@@ -220,7 +242,7 @@ int main(void)
     resp_str(out, resp);
     CHECK(strcmp(resp, "OK MAP 0xE0 0x2C 0x20\n") == 0,
           "GET: canonical map echo");
-    CHECK(nul_padded(out), "GET: out[] NUL-padded to 32 bytes");
+    CHECK(nul_padded(out), "GET: out[] NUL-padded to 48 bytes");
 
     /* -------- 11. SAVE: flash write owned by the caller ------------------ */
     {
@@ -282,6 +304,16 @@ int main(void)
     (void)run("SET 3 0x04", resp);
     (void)run("GET", resp);
     CHECK(cmd_count == before + 2, "cmd_count: +1 per call over two calls");
+
+    /* -------- 17. cmd_code_ok(): the shared SET predicate ---------------- */
+    CHECK(cmd_code_ok(0x00) && cmd_code_ok(0x04) && cmd_code_ok(0x65) &&
+          cmd_code_ok(0xE0) && cmd_code_ok(0xE7),
+          "cmd_code_ok: accepts 0x00/0x04/0x65/0xE0/0xE7");
+    CHECK(!cmd_code_ok(0x03), "cmd_code_ok: rejects 0x03 below 0x04");
+    CHECK(!cmd_code_ok(0x66) && !cmd_code_ok(0x68) && !cmd_code_ok(0x73),
+          "cmd_code_ok: rejects 0x66 and the 0x68..0x73 F13-F24 hole");
+    CHECK(!cmd_code_ok(0xDF) && !cmd_code_ok(0xE8) && !cmd_code_ok(0xFF),
+          "cmd_code_ok: rejects 0xDF/0xE8/0xFF boundaries");
 
     /* -------- verdict ---------------------------------------------------- */
     if (g_failures == 0) {

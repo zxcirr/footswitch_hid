@@ -43,7 +43,10 @@
   *   anything else    -> "ERR unknown\n"  (also for an empty/blank request)
   *
   * Error responses
-  *   "ERR syntax\n"   malformed command word, arguments or hex digits
+  *   "ERR syntax\n"   malformed command word, arguments or hex digits.  The
+  *                    pedal index is a SINGLE decimal digit, so a multi-digit
+  *                    argument (e.g. "SET 10 0x04") is "ERR syntax", NOT
+  *                    "ERR pedal" (the index range is checked after parsing)
   *   "ERR pedal\n"    pedal index outside 1..3
   *   "ERR range\n"    key code outside the accepted set (below)
   *
@@ -98,6 +101,11 @@ uint8_t cmd_handle(const uint8_t in[CMD_FEATURE_LEN], uint8_t out[CMD_FEATURE_LE
  * range.  Note that a valid binding may itself be 0 (disabled), so a zero
  * return is only meaningful together with a valid index. */
 uint8_t cmd_keycode(uint8_t index);
+
+/* 1 = code is accepted by SET: 0x00 (disabled) | 0x04..0x65 (key) |
+ * 0xE0..0xE7 (modifier); 0 = out of range.  Shared by the parser and by
+ * cfg_load() when validating persisted keymap bytes. */
+uint8_t cmd_code_ok(uint8_t code);
 
 /* Raw binding write used by cfg_load() when restoring persisted state.
  * Out-of-range index is ignored.  No range validation of code, and does not

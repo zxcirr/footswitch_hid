@@ -194,10 +194,36 @@ int main(void)
         /* --- SAVE 服务: 擦写 flash 会阻塞取指 ~20-40ms, 只能在主循环执行 --- */
         if (feature_save_pending != 0u)
         {
+            uint8_t km_save[CMD_KEY_COUNT];
+            uint8_t km_changed = 0u;
+
             feature_save_pending = 0u;
+
+            /* Snapshot before the ~20-40 ms flash write: a SET landing while
+            we are erasing must not be marked as saved. */
+            __disable_irq();
+            for (uint8_t i = 0u; i < CMD_KEY_COUNT; i++)
+            {
+                km_save[i] = cmd_keycode(i);
+            }
+            __enable_irq();
+
             if (cfg_save() == 0u)
             {
-                cmd_save_done();
+                __disable_irq();
+                for (uint8_t i = 0u; i < CMD_KEY_COUNT; i++)
+                {
+                    if (cmd_keycode(i) != km_save[i])
+                    {
+                        km_changed = 1u;
+                    }
+                }
+                __enable_irq();
+
+                if (km_changed == 0u)
+                {
+                    cmd_save_done();       /* RAM still equals the flash image */
+                }
                 usb_feature_publish("OK saved\n");
             }
             else

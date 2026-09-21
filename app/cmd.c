@@ -87,8 +87,8 @@ static void resp_map(uint8_t *out) {
 }
 
 /* The documented INFO text "OK INFO fw=1.0 keys=0xNN,0xNN,0xNN dirty=N\n" is
- * 43 bytes, longer than the 32-byte transport; out_put truncates it to the
- * report size (bytes past out[31] are never written). */
+ * 43 bytes and fits the CMD_FEATURE_LEN (48) byte transport; out_put() never
+ * writes past the report size. */
 static void resp_info(uint8_t *out) {
     uint8_t pos = out_put(out, 0, "OK INFO fw=1.0 keys=");
     uint8_t i;
@@ -132,8 +132,9 @@ static int parse_code(const char *t, uint8_t *code) {
 }
 
 /* 0x00 disabled; 0x04..0x65 keys; 0xE0..0xE7 modifiers; else out of range. */
-static int code_ok(uint8_t c) {
-    return c == 0x00U || (c >= 0x04U && c <= 0x65U) || (c >= 0xE0U && c <= 0xE7U);
+uint8_t cmd_code_ok(uint8_t code) {
+    return (uint8_t)(code == 0x00U || (code >= 0x04U && code <= 0x65U) ||
+                     (code >= 0xE0U && code <= 0xE7U));
 }
 
 /* -------------------------------------------------------------- public API */
@@ -177,7 +178,7 @@ uint8_t cmd_handle(const uint8_t in[CMD_FEATURE_LEN], uint8_t out[CMD_FEATURE_LE
             put_err(out, "syntax");
         } else if (n < 1U || n > CMD_KEY_COUNT) {
             put_err(out, "pedal");
-        } else if (!code_ok(code)) {
+        } else if (cmd_code_ok(code) == 0U) {
             put_err(out, "range");
         } else {
             cmd_keymap[n - 1U] = code;

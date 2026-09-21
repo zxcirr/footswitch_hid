@@ -260,9 +260,10 @@ uint8_t cfg_save(void)
 }
 
 /*******************************************************************************
-* cfg_load: read the config page, validate magic, version and the 16-bit
-* checksum; only then apply the three bytes via cmd_set_keymap().  Returns
-* 0 = valid config loaded, 1 = no/invalid config (keymap untouched).
+* cfg_load: read the config page, validate magic, version, the 16-bit checksum
+* and each of the three keymap bytes (cmd_code_ok()); only then apply them via
+* cmd_set_keymap().  Returns 0 = valid config loaded, 1 = no/invalid config
+* (keymap untouched).
 *
 * Main-loop only (the call site is shared with cfg_save()).
 *******************************************************************************/
@@ -291,6 +292,14 @@ uint8_t cfg_load(void)
       (image[CFG_OFF_CHECKSUM + 1u] != (uint8_t)(sum >> 8)))
   {
     return 1u;
+  }
+
+  for (i = 0u; i < CMD_KEY_COUNT; i++)
+  {
+    if (cmd_code_ok(image[CFG_OFF_KEYMAP + i]) == 0u)
+    {
+      return 1u;   /* reject the whole image: never install an invalid code */
+    }
   }
 
   for (i = 0u; i < CMD_KEY_COUNT; i++)

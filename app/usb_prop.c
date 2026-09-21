@@ -54,7 +54,6 @@ static uint8_t  cmd_buf[CMD_FEATURE_LEN];      /* Feature OUT payload (written b
 static uint8_t  resp_buf[CMD_FEATURE_LEN];     /* current published response */
 static uint8_t  resp_snap[CMD_FEATURE_LEN];    /* per-transfer snapshot */
 volatile uint8_t resp_len;                     /* valid bytes in resp_buf (never 0 after init) */
-static volatile uint8_t resp_snap_len;         /* latched for the in-flight GET */
 static volatile uint8_t feature_cmd_pending;   /* set when a Feature SET is armed, cleared in Status_In */
 volatile uint8_t feature_save_pending;         /* set by Status_In when cmd_handle() returned 1; serviced by main */
 /* -------------------------------------------------------------------------- */
@@ -241,6 +240,7 @@ void CustomHID_Reset(void)
   /* Set this device to response on default address */
   SetDeviceAddress(0);
   USB_Tx_Busy = 0;      /* a bus reset may hit an in-flight report */
+  feature_cmd_pending = 0; /* abort any armed Feature SET: cmd_buf is stale */
   bDeviceState = ATTACHED;
 }
 /*******************************************************************************
@@ -446,6 +446,15 @@ uint8_t *CustomHID_SetReport_Feature(uint16_t Length)
     if (Length == 0)
     {
       uint16_t n = pInformation->USBwLength;
+      uint8_t i;
+
+      /* Clear the receive buffer before arming: a short or non-NUL-padded
+      report must not leave stale bytes for the parser. */
+      for (i = 0; i < CMD_FEATURE_LEN; i++)
+      {
+        cmd_buf[i] = 0;
+      }
+
       if (n > CMD_FEATURE_LEN)
       {
         n = CMD_FEATURE_LEN;
@@ -466,6 +475,7 @@ uint8_t *CustomHID_SetReport_Feature(uint16_t Length)
   if (Length == 0)
   {
     pInformation->Ctrl_Info.Usb_wLength = 1;   /* LED output report: 1 byte */
+    pInformation->Ctrl_Info.PacketSize  = Device_Property.MaxPacketSize;
     return NULL;
   }
   else
@@ -582,17 +592,19 @@ uint8_t *CustomHID_GetReport(uint16_t Length)
     {
       uint8_t i;
 
-      /* Latch length and data from the same publish: resp_buf may change
-      between the two CopyData() calls of one transfer */
+      /* Latch the full published report (resp_buf is NUL-padded by
+      usb_feature_publish()) so resp_buf cannot change between the two
+      CopyData() calls of one transfer.  Always answer the declared
+      CMD_FEATURE_LEN-byte report: hosts may expect the full size, and a
+      48-byte data stage is still a single short packet (EP0 MPS = 64). */
       __disable_irq();
       for (i = 0; i < CMD_FEATURE_LEN; i++)
       {
         resp_snap[i] = resp_buf[i];
       }
-      resp_snap_len = (resp_len != 0) ? resp_len : 1;
       __enable_irq();
 
-      pInformation->Ctrl_Info.Usb_wLength = resp_snap_len;
+      pInformation->Ctrl_Info.Usb_wLength = CMD_FEATURE_LEN;
       return NULL;
     }
     return resp_snap;
