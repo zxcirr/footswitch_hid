@@ -39,7 +39,7 @@
   *                       is owned by main.c, not by cmd_handle()).
   *   RESET            -> "OK RESET\n": restore defaults 0x1E/0x1F/0x20 and
   *                       mark the map dirty.
-  *   INFO             -> "OK INFO fw=1.0 keys=0xNN,0xNN,0xNN dirty=<0|1>\n"
+  *   INFO             -> "OK INFO fw=0.0.1 keys=0xNN,0xNN,0xNN dirty=<0|1>\n"
   *   anything else    -> "ERR unknown\n"  (also for an empty/blank request)
   *
   * Error responses

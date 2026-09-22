@@ -265,6 +265,7 @@ int main(void)
     /* -------- 13. INFO --------------------------------------------------- */
     (void)run("INFO", resp);
     CHECK(starts_with(resp, "OK INFO"), "INFO: response prefix");
+    CHECK(contains(resp, "fw=0.0.1"), "INFO: firmware version fw=0.0.1");
     CHECK(contains(resp, "keys="), "INFO: contains keys=");
     CHECK(contains(resp, "dirty="), "INFO: contains dirty=");
     CHECK(contains(resp, "keys=0x1E,0x1F,0x20"), "INFO: keys reflect map");

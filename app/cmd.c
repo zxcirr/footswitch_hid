@@ -86,11 +86,11 @@ static void resp_map(uint8_t *out) {
     (void)out_put(out, pos, "\n");
 }
 
-/* The documented INFO text "OK INFO fw=1.0 keys=0xNN,0xNN,0xNN dirty=N\n" is
- * 43 bytes and fits the CMD_FEATURE_LEN (48) byte transport; out_put() never
+/* The documented INFO text "OK INFO fw=0.0.1 keys=0xNN,0xNN,0xNN dirty=N\n" is
+ * 45 bytes and fits the CMD_FEATURE_LEN (48) byte transport; out_put() never
  * writes past the report size. */
 static void resp_info(uint8_t *out) {
-    uint8_t pos = out_put(out, 0, "OK INFO fw=1.0 keys=");
+    uint8_t pos = out_put(out, 0, "OK INFO fw=0.0.1 keys=");
     uint8_t i;
 
     for (i = 0; i < CMD_KEY_COUNT; i++) {

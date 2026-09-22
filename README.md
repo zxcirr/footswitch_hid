@@ -1,5 +1,7 @@
 # footswitch_hid — 三路脚踏开关 → USB HID 键盘
 
+> 版本:v0.0.1
+
 STM32F103C8T6(TLS 核心板 / Blue Pill 兼容)固件:三个无源脚踏开关接三个 GPIO,
 踩下即通过**板载 USB 口**模拟键盘按键,默认输出 `1` / `2` / `3`。
 
@@ -47,8 +49,8 @@ make clean
 1. **插上开发板自己的 micro-USB** 到电脑(虚拟机需把该 USB 设备直通给 VM):
    ```bash
    lsusb | grep 1209            # 期望: ID 1209:0001
-   lsusb -v -d 1209:0001 2>/dev/null | grep -E "iManufacturer|iProduct"   # 期望 1 "Logitech" / 2 "USB Keyboard"
-   dmesg | tail -20             # 期望: "new full-speed USB device" + "input: Logitech USB Keyboard"
+   lsusb -v -d 1209:0001 2>/dev/null | grep -E "iManufacturer|iProduct"   # 期望 1 "FootSwitch" / 2 "HID Pedal"
+   dmesg | tail -20             # 期望: "new full-speed USB device" + "input: FootSwitch HID Pedal"
    ```
 2. **抓按键事件**(evtest 未安装时用自带脚本):
    ```bash
@@ -121,7 +123,7 @@ HID 描述符里的 `wDescriptorLength = 0x52`;键盘的 8 字节 Input 报告�
 | `GET` | `OK MAP 0xNN 0xNN 0xNN\n` |
 | `SAVE` | 先 `OK saving\n`,Flash 写完后为 `OK saved\n`(失败 `ERR flash\n`) |
 | `RESET` | `OK RESET\n`(恢复默认 1/2/3,需再 `SAVE` 才持久化) |
-| `INFO` | `OK INFO fw=1.0 keys=0xNN,0xNN,0xNN dirty=<0\|1>\n` |
+| `INFO` | `OK INFO fw=0.0.1 keys=0xNN,0xNN,0xNN dirty=<0\|1>\n` |
 | 其它 | `ERR unknown\n` / `ERR syntax\n` / `ERR pedal\n` / `ERR range\n` |
 
 `SET` 的键码规则:
@@ -219,8 +221,9 @@ footswitch_hid/
   SWD 读外设全 0、心跳停止)。键盘需常驻响应,故禁用。
 - **端点**:只有 EP0(控制,64B)+ EP1(中断 IN,8B,`bInterval=1ms`)。
 - **报告只在变化时发送**;`SET_IDLE` 直接 ACK,`GET_REPORT` 返回当前报告。
-- **字符串描述符**:LANGID 0x0409;iManufacturer=1 = "Logitech",iProduct=2 = "USB Keyboard",
-  iSerialNumber=0(无序列号)。主机端输入设备名显示为 **`Logitech USB Keyboard`**。
+- **字符串描述符**:LANGID 0x0409;iManufacturer=1 = "FootSwitch",iProduct=2 = "HID Pedal",
+  iSerialNumber=0(无序列号)。主机端输入设备名显示为 **`FootSwitch HID Pedal`**;
+  设备版本 `bcdDevice = 0.01`(即 v0.0.1)。
 - VID:PID = `0x1209:0x0001`(pid.codes 开源 VID),可按需修改 `app/usb_desc.c`。
 
 ## 8. 已验证 / 待验证
@@ -234,7 +237,7 @@ footswitch_hid/
 - [x] SWD 验证的 C1 固件侧证据:运行时键位表驱动键盘报告(含修饰键/禁用行为);延迟 `SAVE` 写入配置页(magic `0x31474643`、keymap `1E 1F 20`、checksum `0x015F`);复位后 `cfg_load()` 恢复正常
 - [ ] 真实开关踩键(需接好三个开关)
 - [x] 主机侧 Feature `set`/`get`/`save`(`host_test/pedalctl.py`)与复位后持久化 — **真机验证通过**:
-      `--probe` → `OK INFO fw=1.0 keys=0x1E,0x1F,0x20 dirty=0`;`get` → `OK MAP 0x1E 0x1F 0x20`;
+      `--probe` → `OK INFO fw=0.0.1 keys=0x1E,0x1F,0x20 dirty=0`;`get` → `OK MAP 0x1E 0x1F 0x20`;
       `set 1 0x04` → `OK SET 1=0x04`(SWD 佐证 `cmd_keymap=04 1F 20`),踩键输出 Linux `KEY_A`;
       SW1+SW2 同时 → 同帧 `KEY_1`+`KEY_2`;`save` → `OK saving`→`OK saved`(配置页 magic `0x31474643`、
       keymap `04 1F 20`、checksum `0x0145`);复位后 `get` 仍为 `0x04`(从 Flash 恢复)
@@ -264,4 +267,10 @@ cd /home/z/STM32/footswitch_hid
 | 出现 RESET、帧号跳动、DADDR 变化 | 主机在枚举 | 若仍失败,看 `dmesg` 具体错误(如 error -71 多为时序/上拉问题) |
 
 > 注意:板上 USB **未接**时,本固件会一直处于"待命"状态(不进入 STOP,见 §7),因此 SWD 诊断随时可用。
+
+---
+
+## 版本历史
+
+- **v0.0.1** — 首个版本:三路踏板 → USB HID 键盘 + Feature 报告在线改键 + Flash 持久化。
 

@@ -6,9 +6,10 @@ of ROOT/src/config.h (ROOT is the parent of this script's directory), then check
 them against the boot-keyboard requirements:
 
   device_desc : 18 bytes, bLength=18, bDescriptorType=1, bcdUSB=0x0110,
-                bDeviceClass=0, bMaxPacketSize0=64, idVendor=0x1209,
-                idProduct=0x0001, bNumConfigurations=1,
-                iManufacturer=1, iProduct=2, iSerialNumber=0
+                bcdDevice=0x0001 (displayed 0.01 = v0.0.1), bDeviceClass=0,
+                bMaxPacketSize0=64, idVendor=0x1209, idProduct=0x0001,
+                bNumConfigurations=1, iManufacturer=1, iProduct=2,
+                iSerialNumber=0
   config_desc : bLength=9, bDescriptorType=2, wTotalLength==blob length,
                 bNumInterfaces=1, bConfigurationValue=1, bmAttributes=0x80,
                 bMaxPower<=100, then exactly one Interface (class 3,
@@ -28,9 +29,9 @@ them against the boot-keyboard requirements:
                 and the Data flag (bit0) set.
   keymap      : config.h defines PB9/PB8/PB7 and HID codes 0x1E/0x1F/0x20.
   strings     : CustomHID_StringLangID == {04 03 09 04} (LANGID 0x0409);
-                CustomHID_StringVendor == header {12 03} + UTF-16LE "Logitech"
-                (bLength=0x12=18); CustomHID_StringProduct == header {1C 03} +
-                UTF-16LE "USB Keyboard" (bLength=0x1C=28); serial stays the
+                CustomHID_StringVendor == header {16 03} + UTF-16LE "FootSwitch"
+                (bLength=0x16=22); CustomHID_StringProduct == header {14 03} +
+                UTF-16LE "HID Pedal" (bLength=0x14=20); serial stays the
                 empty {02 03}; each array's first byte equals its length and
                 its second byte is 0x03.
 
@@ -173,13 +174,15 @@ def check_device_desc(arrays):
     check_u8(arr, 7, "bMaxPacketSize0", 64, problems)
     check_le16(arr, 8, "idVendor", 0x1209, problems)
     check_le16(arr, 10, "idProduct", 0x0001, problems)
+    # bcdDevice 0.01 = BCD 0x0001, stored little-endian as bytes {01,00}
+    check_le16(arr, 12, "bcdDevice", 0x0001, problems)
     check_u8(arr, 17, "bNumConfigurations", 1, problems)
     check_u8(arr, 14, "iManufacturer", 1, problems)
     check_u8(arr, 15, "iProduct", 2, problems)
     check_u8(arr, 16, "iSerialNumber", 0, problems)
     if problems:
         return False, "%s: %s" % (arr.name, "; ".join(problems)), {}
-    return True, ("%s[18]: USB FS device descriptor, 1209:0001, "
+    return True, ("%s[18]: USB FS device descriptor, 1209:0001, bcdDevice=0.01, "
                   "iManufacturer=1 iProduct=2 iSerialNumber=0") % arr.name, {}
 
 
@@ -538,9 +541,9 @@ def check_strings(arrays):
         ("StringLangID", find_array(arrays, "string", "langid"),
          [0x04, 0x03, 0x09, 0x04], "LANGID 0x0409"),
         ("StringVendor", find_array(arrays, "string", "vendor"),
-         utf16le_string("Logitech"), 'UTF-16LE "Logitech"'),
+         utf16le_string("FootSwitch"), 'UTF-16LE "FootSwitch"'),
         ("StringProduct", find_array(arrays, "string", "product"),
-         utf16le_string("USB Keyboard"), 'UTF-16LE "USB Keyboard"'),
+         utf16le_string("HID Pedal"), 'UTF-16LE "HID Pedal"'),
         ("StringSerial", find_array(arrays, "string", "serial"),
          [0x02, 0x03], "empty (2-byte header)"),
     )
@@ -566,7 +569,7 @@ def check_strings(arrays):
                 "%s=%s want %s (%s)" % (arr.name, fmt_bytes(got), fmt_bytes(want), label))
     if problems:
         return False, "; ".join(problems), {}
-    return True, ('langid=0x0409, vendor="Logitech", product="USB Keyboard", '
+    return True, ('langid=0x0409, vendor="FootSwitch", product="HID Pedal", '
                   "serial empty; bLength/type headers valid"), {}
 
 
