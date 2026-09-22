@@ -8,7 +8,7 @@
   *   - VID:PID = 0x1209:0x0001 (pid.codes open-source VID; change freely)
   *   - 1 interface, boot keyboard (class 3 / subclass 1 / protocol 1)
   *   - 1 interrupt IN endpoint (0x81, 8 bytes, 1 ms interval)
-  *   - no string descriptors referenced (indices 0) -> minimal enumeration
+  *   - string descriptors: LANGID 0x0409, "Logitech" + "USB Keyboard" (no serial)
   ******************************************************************************
   */
 
@@ -19,7 +19,7 @@
 const uint8_t CustomHID_DeviceDescriptor[CUSTOMHID_SIZ_DEVICE_DESC] =
 {
   0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x40,
-  0x09, 0x12, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+  0x09, 0x12, 0x01, 0x00, 0x00, 0x01, 0x01, 0x02,
   0x00, 0x01
 };
 
@@ -54,7 +54,7 @@ const uint8_t CustomHID_ReportDescriptor[CUSTOMHID_SIZ_REPORT_DESC] =
   0xB1, 0x02, 0xC0
 };
 
-/* String descriptors: kept minimal, none referenced by the device descriptor */
+/* String descriptors: LANGID 0x0409, "Logitech", "USB Keyboard", empty serial */
 const uint8_t CustomHID_StringLangID[CUSTOMHID_SIZ_STRING_LANGID] =
 {
   0x04, 0x03, 0x09, 0x04
@@ -62,12 +62,17 @@ const uint8_t CustomHID_StringLangID[CUSTOMHID_SIZ_STRING_LANGID] =
 
 const uint8_t CustomHID_StringVendor[CUSTOMHID_SIZ_STRING_VENDOR] =
 {
-  0x02, 0x03
+  0x12, 0x03, 0x4C, 0x00, 0x6F, 0x00, 0x67, 0x00,
+  0x69, 0x00, 0x74, 0x00, 0x65, 0x00, 0x63, 0x00,
+  0x68, 0x00
 };
 
 const uint8_t CustomHID_StringProduct[CUSTOMHID_SIZ_STRING_PRODUCT] =
 {
-  0x02, 0x03
+  0x1A, 0x03, 0x55, 0x00, 0x53, 0x00, 0x42, 0x00,
+  0x20, 0x00, 0x4B, 0x00, 0x65, 0x00, 0x79, 0x00,
+  0x62, 0x00, 0x6F, 0x00, 0x61, 0x00, 0x72, 0x00,
+  0x64, 0x00
 };
 
 uint8_t CustomHID_StringSerial[CUSTOMHID_SIZ_STRING_SERIAL] =

@@ -8,7 +8,7 @@ them against the boot-keyboard requirements:
   device_desc : 18 bytes, bLength=18, bDescriptorType=1, bcdUSB=0x0110,
                 bDeviceClass=0, bMaxPacketSize0=64, idVendor=0x1209,
                 idProduct=0x0001, bNumConfigurations=1,
-                iManufacturer=iProduct=iSerialNumber=0
+                iManufacturer=1, iProduct=2, iSerialNumber=0
   config_desc : bLength=9, bDescriptorType=2, wTotalLength==blob length,
                 bNumInterfaces=1, bConfigurationValue=1, bmAttributes=0x80,
                 bMaxPower<=100, then exactly one Interface (class 3,
@@ -27,6 +27,12 @@ them against the boot-keyboard requirements:
                 item (0xB1) with Report Size 8, Report Count 48 (384 bits)
                 and the Data flag (bit0) set.
   keymap      : config.h defines PB9/PB8/PB7 and HID codes 0x1E/0x1F/0x20.
+  strings     : CustomHID_StringLangID == {04 03 09 04} (LANGID 0x0409);
+                CustomHID_StringVendor == header {12 03} + UTF-16LE "Logitech"
+                (bLength=0x12=18); CustomHID_StringProduct == header {1C 03} +
+                UTF-16LE "USB Keyboard" (bLength=0x1C=28); serial stays the
+                empty {02 03}; each array's first byte equals its length and
+                its second byte is 0x03.
 
 Stdlib only. Runnable from any cwd. Exit 0 iff every check passes.
 """
@@ -44,7 +50,7 @@ ARRAY_RE = re.compile(
     re.S,
 )
 
-N_CHECKS = 5  # device_desc, config_desc, report_desc, vendor_feature, keymap
+N_CHECKS = 6  # device_desc, config_desc, report_desc, vendor_feature, keymap, strings
 
 
 def strip_comments(text):
@@ -168,11 +174,13 @@ def check_device_desc(arrays):
     check_le16(arr, 8, "idVendor", 0x1209, problems)
     check_le16(arr, 10, "idProduct", 0x0001, problems)
     check_u8(arr, 17, "bNumConfigurations", 1, problems)
-    for i, fname in ((14, "iManufacturer"), (15, "iProduct"), (16, "iSerialNumber")):
-        check_u8(arr, i, fname, 0, problems)
+    check_u8(arr, 14, "iManufacturer", 1, problems)
+    check_u8(arr, 15, "iProduct", 2, problems)
+    check_u8(arr, 16, "iSerialNumber", 0, problems)
     if problems:
         return False, "%s: %s" % (arr.name, "; ".join(problems)), {}
-    return True, "%s[18]: USB FS device descriptor, 1209:0001" % arr.name, {}
+    return True, ("%s[18]: USB FS device descriptor, 1209:0001, "
+                  "iManufacturer=1 iProduct=2 iSerialNumber=0") % arr.name, {}
 
 
 # ---------------------------------------------------------------- config_desc
@@ -513,6 +521,55 @@ def check_keymap():
     return True, "config.h maps SW1/SW2/SW3 to PB9/PB8/PB7 with HID codes 0x1E/0x1F/0x20", {}
 
 
+# -------------------------------------------------------------------- strings
+
+def utf16le_string(s):
+    """Expected USB string descriptor bytes: 2-byte header + UTF-16LE text."""
+    text = list(s.encode("utf-16-le"))
+    return [len(text) + 2, 0x03] + text
+
+
+def fmt_bytes(vals):
+    return "{" + ",".join("0x%02X" % v for v in vals) + "}"
+
+
+def check_strings(arrays):
+    specs = (
+        ("StringLangID", find_array(arrays, "string", "langid"),
+         [0x04, 0x03, 0x09, 0x04], "LANGID 0x0409"),
+        ("StringVendor", find_array(arrays, "string", "vendor"),
+         utf16le_string("Logitech"), 'UTF-16LE "Logitech"'),
+        ("StringProduct", find_array(arrays, "string", "product"),
+         utf16le_string("USB Keyboard"), 'UTF-16LE "USB Keyboard"'),
+        ("StringSerial", find_array(arrays, "string", "serial"),
+         [0x02, 0x03], "empty (2-byte header)"),
+    )
+    problems = []
+    for label_name, arr, want, label in specs:
+        if arr is None:
+            problems.append("no uint8_t array named *%s* found" % label_name)
+            continue
+        bad = [r for r, v in zip(arr.raws, arr.values) if v is None]
+        if bad:
+            problems.append("%s: non-numeric tokens %s" % (arr.name, bad))
+            continue
+        got = arr.values
+        if len(got) < 2:
+            problems.append("%s has %d bytes, need at least 2" % (arr.name, len(got)))
+            continue
+        if got[0] != len(got) or got[1] != 0x03:
+            problems.append(
+                "%s: bLength=%d bDescriptorType=0x%02X want bLength=%d, type 0x03"
+                % (arr.name, got[0], got[1], len(got)))
+        if got != want:
+            problems.append(
+                "%s=%s want %s (%s)" % (arr.name, fmt_bytes(got), fmt_bytes(want), label))
+    if problems:
+        return False, "; ".join(problems), {}
+    return True, ('langid=0x0409, vendor="Logitech", product="USB Keyboard", '
+                  "serial empty; bLength/type headers valid"), {}
+
+
 # ----------------------------------------------------------------------- main
 
 def main():
@@ -545,6 +602,9 @@ def main():
 
     ok, detail, _ = check_keymap()
     record("keymap", ok, detail)
+
+    ok, detail, _ = check_strings(arrays)
+    record("strings", ok, detail)
 
     good = passed == N_CHECKS
     print("RESULT: %s (%d/%d checks)" % ("PASS" if good else "FAIL", passed, N_CHECKS))

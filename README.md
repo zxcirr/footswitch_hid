@@ -47,7 +47,8 @@ make clean
 1. **插上开发板自己的 micro-USB** 到电脑(虚拟机需把该 USB 设备直通给 VM):
    ```bash
    lsusb | grep 1209            # 期望: ID 1209:0001
-   dmesg | tail -20             # 期望: "new full-speed USB device" + "input: ... Keyboard"
+   lsusb -v -d 1209:0001 2>/dev/null | grep -E "iManufacturer|iProduct"   # 期望 1 "Logitech" / 2 "USB Keyboard"
+   dmesg | tail -20             # 期望: "new full-speed USB device" + "input: Logitech USB Keyboard"
    ```
 2. **抓按键事件**(evtest 未安装时用自带脚本):
    ```bash
@@ -200,7 +201,7 @@ footswitch_hid/
 │   ├── st_usbfs/         ST 官方 USB FS 设备库 V4.0.0(inc/ + src/)
 │   └── cmsis/            stm32f10x.h / core_cm3 / system_stm32f10x
 ├── host_test/          主机侧测试与工具
-│   ├── test_descriptors.py 描述符校验(make test,5 项)
+│   ├── test_descriptors.py 描述符校验(make test,6 项)
 │   ├── test_cmd.c          cmd 命令解析主机单测(见 §5.5)
 │   ├── pedalctl.py         在线改键工具(见 §5.5)
 │   ├── evdev_read.py       按键事件抓取
@@ -218,13 +219,14 @@ footswitch_hid/
   SWD 读外设全 0、心跳停止)。键盘需常驻响应,故禁用。
 - **端点**:只有 EP0(控制,64B)+ EP1(中断 IN,8B,`bInterval=1ms`)。
 - **报告只在变化时发送**;`SET_IDLE` 直接 ACK,`GET_REPORT` 返回当前报告。
-- **无字符串描述符**(设备描述符 iManufacturer/iProduct/iSerialNumber = 0),枚举最简。
+- **字符串描述符**:LANGID 0x0409;iManufacturer=1 = "Logitech",iProduct=2 = "USB Keyboard",
+  iSerialNumber=0(无序列号)。主机端输入设备名显示为 **`Logitech USB Keyboard`**。
 - VID:PID = `0x1209:0x0001`(pid.codes 开源 VID),可按需修改 `app/usb_desc.c`。
 
 ## 8. 已验证 / 待验证
 
-- [x] 编译零警告;Flash 镜像 ≈ **8044 B**(text 7828 + data 216),RAM bss 2368 B
-- [x] 主机侧描述符校验 5/5 通过(`make test`,含 48B vendor Feature 集合)
+- [x] 编译零警告;Flash 镜像 ≈ **8200 B**(text 7984 + data 216),RAM bss 2368 B
+- [x] 主机侧描述符校验 6/6 通过(`make test`,含 48B vendor Feature 集合与字符串描述符)
 - [x] `cmd` 主机单测 ALL PASS(`gcc -std=c11 -Wall -Wextra -Wshadow -Iapp host_test/test_cmd.c app/cmd.c`,见 §5.5)
 - [x] SWD 实测:72MHz、USBEN、EP0R=0x3210、DADDR=0x82、USB_Configured=1、NVIC IRQ20
 - [x] 真机 USB 枚举成功(主机已分配地址:SWD 读到 DADDR=0x82 / USB_Configured=1)
