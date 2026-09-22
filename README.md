@@ -233,7 +233,11 @@ footswitch_hid/
 - [x] SWD 注入模拟踩键:SW1/2/3 → 0x1E/0x1F/0x20,组合键同帧,消抖无重复
 - [x] SWD 验证的 C1 固件侧证据:运行时键位表驱动键盘报告(含修饰键/禁用行为);延迟 `SAVE` 写入配置页(magic `0x31474643`、keymap `1E 1F 20`、checksum `0x015F`);复位后 `cfg_load()` 恢复正常
 - [ ] 真实开关踩键(需接好三个开关)
-- [ ] 主机侧 Feature `set`/`get`/`save`(`host_test/pedalctl.py`)与断电持久化 — **待验证**
+- [x] 主机侧 Feature `set`/`get`/`save`(`host_test/pedalctl.py`)与复位后持久化 — **真机验证通过**:
+      `--probe` → `OK INFO fw=1.0 keys=0x1E,0x1F,0x20 dirty=0`;`get` → `OK MAP 0x1E 0x1F 0x20`;
+      `set 1 0x04` → `OK SET 1=0x04`(SWD 佐证 `cmd_keymap=04 1F 20`),踩键输出 Linux `KEY_A`;
+      SW1+SW2 同时 → 同帧 `KEY_1`+`KEY_2`;`save` → `OK saving`→`OK saved`(配置页 magic `0x31474643`、
+      keymap `04 1F 20`、checksum `0x0145`);复位后 `get` 仍为 `0x04`(从 Flash 恢复)
 
 ---
 
