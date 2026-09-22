@@ -32,9 +32,16 @@ EV_KEY = 0x01
 SYN_REPORT = 0
 
 KEY_NAMES = {
-    30: "KEY_1",
-    31: "KEY_2",
-    32: "KEY_3",
+    1: "KEY_ESC", 2: "KEY_1", 3: "KEY_2", 4: "KEY_3", 5: "KEY_4", 6: "KEY_5",
+    7: "KEY_6", 8: "KEY_7", 9: "KEY_8", 10: "KEY_9", 11: "KEY_0",
+    15: "KEY_TAB", 28: "KEY_ENTER", 29: "KEY_LEFTCTRL", 42: "KEY_LEFTSHIFT",
+    56: "KEY_LEFTALT", 57: "KEY_SPACE",
+    30: "KEY_A", 31: "KEY_S", 32: "KEY_D", 33: "KEY_F", 34: "KEY_G", 35: "KEY_H",
+    36: "KEY_J", 37: "KEY_K", 38: "KEY_L", 44: "KEY_Z", 45: "KEY_X", 46: "KEY_C",
+    47: "KEY_V", 48: "KEY_B", 49: "KEY_N", 50: "KEY_M",
+    59: "KEY_F1", 60: "KEY_F2", 61: "KEY_F3", 62: "KEY_F4", 63: "KEY_F5",
+    64: "KEY_F6", 65: "KEY_F7", 66: "KEY_F8", 67: "KEY_F9", 68: "KEY_F10",
+    87: "KEY_F11", 88: "KEY_F12",
 }
 
 

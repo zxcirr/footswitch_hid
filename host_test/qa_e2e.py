@@ -34,7 +34,7 @@ SW = {
     "SW2": (GPIOB_CRH, 0x00000022, 0x00000100, GPIOB_CRH, 0x00000088, 0x00000100),
     "SW3": (GPIOB_CRL, 0x20000000, 0x00000080, GPIOB_CRL, 0x80000000, 0x00000080),
 }
-KEYCODE = {"SW1": 30, "SW2": 31, "SW3": 32}
+KEYCODE = {"SW1": 2, "SW2": 3, "SW3": 4}
 
 results = []
 
@@ -184,12 +184,13 @@ def main():
         record(f"S2 {name} -> KEY code {code} down/up", downs >= 1 and ups >= 1,
                f"down={downs} up={ups}")
 
+    sw1, sw2 = KEYCODE["SW1"], KEYCODE["SW2"]
     combo_ok = False
     for i, (_, c, v) in enumerate(events):
-        if v == 1 and c in (30, 31):
-            seen = {30 if c == 30 else 31}
+        if v == 1 and c in (sw1, sw2):
+            seen = {c}
             for _, c2, v2 in events[i + 1:]:
-                if v2 == 1 and c2 in (30, 31):
+                if v2 == 1 and c2 in (sw1, sw2):
                     seen.add(c2)
                 if v2 == 0:
                     break
@@ -198,11 +199,11 @@ def main():
                 break
     record("S3 combo SW1+SW2 pressed in the same frame", combo_ok)
 
-    sw1_pairs = min(sum(1 for _, c, v in events if c == 30 and v == 1),
-                    sum(1 for _, c, v in events if c == 30 and v == 0))
+    sw1_pairs = min(sum(1 for _, c, v in events if c == sw1 and v == 1),
+                    sum(1 for _, c, v in events if c == sw1 and v == 0))
     record("S3 SW1 pairs == 1(tap)+1(combo)+3(taps) = 5", sw1_pairs == 5, f"pairs={sw1_pairs}")
 
-    unexpected = [c for c in codes if c not in (30, 31, 32)]
+    unexpected = [c for c in codes if c not in tuple(KEYCODE.values())]
     record("S3 no unexpected key codes", not unexpected, f"codes={codes}")
 
     print("\n--- S4: 复位键 -> 重新枚举 ---", flush=True)
