@@ -3,9 +3,15 @@
 """pedalctl.py - host-side CLI for the footswitch keyboard HID Feature-report channel.
 
 Device / 设备
-    VID 0x1209, PID 0x0001.  The vendor Feature report (usage page 0xFF00,
-    usage 0x01) lives in the SAME USB interface as the boot keyboard and there
-    are no report IDs.
+    VID 0x1209, PID 0x0001.  Two USB HID interfaces (QMK/VIA-style layout):
+      * interface 0 = boot keyboard: own 63-byte report descriptor with a
+        single top-level keyboard collection, EP1 IN (8 bytes, 1 ms);
+      * interface 1 = vendor HID: own 19-byte report descriptor with a single
+        top-level usage page 0xFF00 / usage 0x01 collection carrying the
+        48-byte Feature report, EP2 IN (8 bytes, 1 ms, never transmits).
+    Each interface is its own HID device object; the Feature channel lives on
+    interface 1.  There are no report IDs anywhere (Windows HidUsb rejects a
+    descriptor with more than one top-level collection and no report ID).
 
 Protocol / 协议
     48-byte ASCII commands -> 48-byte ASCII responses (NUL padded):
@@ -19,7 +25,7 @@ Protocol / 协议
     text (case-insensitive).  Stale buffer text from an earlier command is
     never accepted: the tool exits 2 and asks the user to re-check the device
     with --probe.
-    HID Get/Set_Report(Feature): wValue=0x0300, wIndex=interface 0, wLength=48.
+    HID Get/Set_Report(Feature): wValue=0x0300, wIndex=interface 1, wLength=48.
     hidapi/hidraw buffers include a leading report-ID byte, so 49-byte buffers
     are used and a leading 0x00 is stripped from responses; the payload is
     NUL-padded and the command text must stay <= 47 characters (the device
@@ -27,20 +33,29 @@ Protocol / 协议
 
 Opening strategy / 打开策略
     1) If the OPTIONAL `import hid` (cython-hidapi / PyPI `hid`) succeeds:
-       enumerate(0x1209, 0x0001), pick usage_page == 0xFF00 (and usage == 0x01
-       when present), open by path.  If the vendor collection is missing, every
-       enumerated entry is dumped and the script exits 2.
+       enumerate(0x1209, 0x0001); open ONLY the entry with usage_page == 0xFF00
+       (usage == 0x01 when present) - that is interface 1.  The keyboard
+       interface (usage page 0x01) is never opened.  If no 0xFF00 entry is
+       present, every enumerated entry is dumped and the script exits 2.
     2) Otherwise fall back to a raw Linux hidraw ioctl (HIDIOCSFEATURE /
-       HIDIOCGFEATURE with the report-ID-0 buffer), finding nodes via
-       /sys/class/hidraw/*/device/uevent (HID_ID=...00001209:00000001...).
+       HIDIOCGFEATURE with the report-ID-0 buffer).  The device exposes TWO
+       /dev/hidraw* nodes with the same HID_ID (HID_ID=...00001209:00000001...),
+       so the vendor interface is selected by reading each candidate's sysfs
+       report descriptor (/sys/class/hidraw/hidrawN/device/report_descriptor)
+       and keeping the node that contains Usage Page 0xFF00.  If that sysfs
+       file is unreadable, each candidate is probed with an INFO Feature
+       request (the vendor interface answers "OK INFO", the keyboard interface
+       STALLs the request) and the winning probe reply is drained before the
+       handle is returned.
 
 macOS caveat / macOS 注意
-    Because the vendor collection shares the boot-keyboard interface, macOS's
-    hidapi opens the device exclusively by default and seizing a keyboard device
-    needs root.  Workarounds:
-      1) use the PyPI `hidapi` binding with hid_darwin_set_open_exclusive(0);
-      2) run this script as root;
-      3) ask for the separate-interface firmware variant.
+    The vendor Feature report now lives on its own USB interface and top-level
+    collection, so hidapi opens only the vendor HID device - it no longer has
+    to seize the keyboard, and the old exclusive-open/root workaround is not
+    needed for this firmware.  (On older single-interface firmware the vendor
+    Feature report shared the keyboard collection and seizing it needed root:
+    1) PyPI `hidapi` binding + hid_darwin_set_open_exclusive(0); 2) run as
+    root; 3) use this two-interface firmware.)
 
 Python 3 stdlib only, except the OPTIONAL `import hid`.
 """
@@ -65,6 +80,8 @@ REPORT_SIZE = 48                 # 48-byte ASCII payload
 BUF_SIZE = REPORT_SIZE + 1       # +1 leading report-ID byte (0x00) for hidapi/hidraw
 DEFAULT_RETRIES = 8
 DEFAULT_DELAY = 0.25
+PROBE_RETRIES = 4                # hidraw vendor-interface probe (sysfs unavailable)
+PROBE_DELAY = 0.05
 TARGET_HID_ID = "%08X:%08X" % (VENDOR_ID, PRODUCT_ID)   # "00001209:00000001"
 
 # --------------------------------------------------------------------------- #
@@ -120,25 +137,34 @@ EPILOG = """\
   pedalctl.py info                   设备信息 / device info
 
 协议 / protocol:
-  48 字节 ASCII Feature report 命令 (wValue=0x0300, wIndex=0, wLength=48);
+  48 字节 ASCII Feature report 命令 (wValue=0x0300, wIndex=1, wLength=48);
   hidapi/hidraw 缓冲带首字节 report ID, 因此实际使用 49 字节; 负载需 NUL 填充,
   命令文本最多 47 个字符 (设备把收到的长度截断到 48)。
   响应为 48 字节 ASCII, NUL 填充。save/get 会自动轮询 (约 8 次 x 250ms)。
   成功判定是严格的: 应答必须与请求语义匹配 (如 SET 必须回 "OK SET n=0xNN"),
   收到旧命令的残留文本不会被当作成功 (退出码 2)。
 
+设备 / device:
+  两个 USB HID 接口: 接口0 = boot 键盘 (63 字节报告描述符, 无 0xFF00);
+  接口1 = 厂商 HID (19 字节报告描述符, usage page 0xFF00/usage 0x01,
+  48 字节 Feature 报告)。Linux 下会出现两个 HID_ID 相同的 /dev/hidraw* 节点,
+  本工具通过 sysfs report_descriptor 是否含 0xFF00 选择厂商节点 (读不到时
+  用 INFO Feature 请求探测); --list 会标出哪个节点是厂商接口。
+
 退出码 / exit codes: 0=应答与请求匹配, 1=设备返回 ERR, 2=应答缺失/不符(stale)或传输失败
   (0=reply matches the request, 1=device returned ERR, 2=no/stale reply or transport
   failure; 请用 --probe 复查设备 / re-check the device with --probe)
 
 macOS 注意 / macOS caveat:
-  厂商 (0xFF00) Feature 集合与 boot keyboard 共用同一个 USB 接口, macOS 上 hidapi
-  默认以独占方式打开设备, 抢占键盘设备需要 root 权限 / because the vendor collection
-  shares the boot-keyboard interface, macOS hidapi opens exclusively by default and
-  seizing a keyboard device needs root. 三种方案 / three workarounds:
+  厂商 (0xFF00) Feature 报告现在位于独立的 USB 接口与独立的顶层集合, macOS 上
+  hidapi 只打开该厂商 HID 设备, 不再抢占键盘, 因此无需旧的独占打开/root 方案 /
+  the vendor (0xFF00) Feature report now lives on its own USB interface and
+  top-level collection, so macOS hidapi opens only the vendor HID device and no
+  longer seizes the keyboard; the old exclusive-open/root workarounds are not
+  needed. 仅旧版单接口固件需要 / only older single-interface firmware needs them:
     1) 安装 PyPI `hidapi` 绑定并先调用 hid_darwin_set_open_exclusive(0) 再打开;
     2) 以 root 运行 / run as root:            sudo python3 pedalctl.py ...
-    3) 使用厂商集合独立接口的固件版本 / use the separate-interface firmware variant.
+    3) 使用本双接口固件 / use this two-interface firmware.
 """
 
 ERR_RE = re.compile(r"^ERR\b", re.IGNORECASE)
@@ -349,6 +375,118 @@ def find_hidraw_nodes():
             if TARGET_HID_ID in hid_id.upper()]
 
 
+def _descriptor_has_usage_page(blob: bytes, page: int) -> bool:
+    """Walk HID short items and return True if a Usage Page global == page."""
+    off = 0
+    while off < len(blob):
+        prefix = blob[off]
+        bsize = prefix & 0x03
+        btype = (prefix >> 2) & 0x03
+        btag = (prefix >> 4) & 0x0F
+        nbytes = 4 if bsize == 3 else bsize
+        if off + 1 + nbytes > len(blob):
+            return False
+        if btype == 1 and btag == 0x0:          # Global Usage Page
+            value = 0
+            for i in range(nbytes):
+                value |= blob[off + 1 + i] << (8 * i)
+            if value == page:
+                return True
+        off += 1 + nbytes
+    return False
+
+
+def _read_report_descriptor(node: str):
+    """Read the HID report descriptor sysfs exposes for a hidraw node.
+
+    The device has two interfaces with the same VID:PID, hence two /dev/hidraw*
+    nodes whose HID_ID matches; report_descriptor (next to the HID device's
+    uevent, reachable through the node's `device/` symlink) is what tells the
+    vendor interface (Usage Page 0xFF00) from the keyboard interface.
+    Returns the bytes, or None when unavailable (permissions, old kernel).
+    """
+    name = os.path.basename(node)
+    seen = set()
+    for base in (os.path.join("/sys/class/hidraw", name, "device"),
+                 os.path.join("/sys/class/hidraw", name)):
+        try:
+            real = os.path.realpath(base)
+        except OSError:
+            continue
+        if real in seen:
+            continue
+        seen.add(real)
+        try:
+            with open(os.path.join(real, "report_descriptor"), "rb") as handle:
+                return handle.read()
+        except OSError:
+            continue
+    return None
+
+
+def classify_hidraw_nodes(nodes):
+    """Split matching hidraw nodes into (vendor, other, unknown).
+
+    vendor  : sysfs descriptor read OK and contains Usage Page 0xFF00
+    other   : sysfs descriptor read OK and does NOT contain it (keyboard)
+    unknown : descriptor unavailable - the caller must probe
+    """
+    vendor, other, unknown = [], [], []
+    for node, source in nodes:
+        blob = _read_report_descriptor(node)
+        if blob is None:
+            unknown.append((node, source))
+        elif _descriptor_has_usage_page(blob, VENDOR_USAGE_PAGE):
+            vendor.append((node, source))
+        else:
+            other.append((node, source))
+    return vendor, other, unknown
+
+
+def _node_role_label(node: str) -> str:
+    blob = _read_report_descriptor(node)
+    if blob is None:
+        return "? (report_descriptor unreadable; probe to identify)"
+    if _descriptor_has_usage_page(blob, VENDOR_USAGE_PAGE):
+        return "VENDOR/feature-capable (usage page 0xFF00) - use this one"
+    return "keyboard (no 0xFF00) - Feature channel lives on the other node"
+
+
+def _probe_vendor_node(node: str):
+    """Open `node`, send INFO, and return the open HidrawDevice on OK INFO.
+
+    Fallback for when sysfs report descriptors are unavailable: the vendor
+    interface answers Feature requests, the keyboard interface STALLs them.
+    The OK INFO reply is drained (one extra full feature read) before the
+    handle is returned, so the strict matcher can never later mistake that
+    stale text for the reply to a new command.
+    """
+    try:
+        device = HidrawDevice(node)
+    except OSError as exc:
+        print(_warn("探测 %s 失败 / probe of %s failed: %s" % (node, node, exc)))
+        if _looks_like_permission_error(exc):
+            print(HINT_PERMISSION)
+        return None
+    try:
+        payload = "INFO".encode("ascii")[:REPORT_SIZE].ljust(REPORT_SIZE, b"\x00")
+        device.send_feature(payload)
+        for attempt in range(PROBE_RETRIES):
+            if attempt:
+                time.sleep(PROBE_DELAY)
+            raw = normalize_response(device.get_feature())
+            text = decode_text(raw)
+            if INFO_OK_RE.match(text):
+                device.get_feature()    # drain the probe reply fully
+                return device
+            if ERR_RE.match(text):
+                break
+    except Exception:
+        pass
+    device.close()
+    return None
+
+
 def cmd_list(hid_module) -> int:
     print("== hidapi 设备 / hidapi devices ==")
     if hid_module is None:
@@ -369,10 +507,13 @@ def cmd_list(hid_module) -> int:
     if not rows:
         print("  (无节点 / no nodes)")
     for node, source, hid_id, hid_name in rows:
-        match = "  <== MATCH VID:PID 1209:0001" if TARGET_HID_ID in hid_id.upper() else ""
+        match = TARGET_HID_ID in hid_id.upper()
         print("  - %s  HID_ID=%s  HID_NAME=%s%s"
-              % (node, hid_id or "?", hid_name or "?", match))
+              % (node, hid_id or "?", hid_name or "?",
+                 "  <== MATCH VID:PID 1209:0001" if match else ""))
         print("      sysfs: %s" % source)
+        if match:
+            print("      role : %s" % _node_role_label(node))
     return 0
 
 
@@ -402,8 +543,11 @@ def _open_via_hidapi(hid_module):
             break
 
     if chosen is None:
-        print(_err("未找到厂商 Feature 集合 / vendor collection not found "
-                   "(usage_page=0x%04X, usage=0x%02X)." % (VENDOR_USAGE_PAGE, VENDOR_USAGE)))
+        # No fallback to "any 1209:0001 entry": with two interfaces that would
+        # open the keyboard collection, whose Feature requests are STALLed.
+        print(_err("未找到厂商 HID 条目 / no vendor HID entry found (usage_page=0x%04X, "
+                   "usage=0x%02X) for VID 0x%04X / PID 0x%04X."
+                   % (VENDOR_USAGE_PAGE, VENDOR_USAGE, VENDOR_ID, PRODUCT_ID)))
         if entries:
             print("已枚举目录 / enumerated entries:")
             for entry in entries:
@@ -411,6 +555,7 @@ def _open_via_hidapi(hid_module):
         else:
             print("未枚举到 VID 0x%04X / PID 0x%04X 设备 / no device with that VID/PID enumerated."
                   % (VENDOR_ID, PRODUCT_ID))
+        print(_warn("可用 `--list` 复查 HID/hidraw 候选 / use `--list` to re-check HID/hidraw candidates"))
         print(HINT_NOT_FOUND)
         return None, 2
 
@@ -436,18 +581,48 @@ def _open_via_hidraw():
         print(HINT_NOT_FOUND)
         return None, 2
 
-    node, source = nodes[0]
-    try:
-        device = HidrawDevice(node)
-    except OSError as exc:
-        print(_err("打开 %s 失败 / failed to open %s: %s" % (node, node, exc)))
-        if _looks_like_permission_error(exc):
-            print(HINT_PERMISSION)
+    vendor, other, unknown = classify_hidraw_nodes(nodes)
+
+    if vendor:
+        if len(vendor) > 1:
+            print(_warn("多个节点报告 usage page 0xFF00 / several nodes expose usage page "
+                        "0xFF00; using the first"))
+        node, source = vendor[0]
+        try:
+            device = HidrawDevice(node)
+        except OSError as exc:
+            print(_err("打开 %s 失败 / failed to open %s: %s" % (node, node, exc)))
+            if _looks_like_permission_error(exc):
+                print(HINT_PERMISSION)
+            return None, 2
+        print(_ok("通过 hidraw 后备通道打开厂商接口 / opened the vendor interface via hidraw "
+                  "fallback: %s (sysfs report_descriptor contains 0xFF00; sysfs: %s)"
+                  % (node, source)))
+        return device, None
+
+    if other and not unknown:
+        print(_err("匹配 VID:PID 的 hidraw 节点都不含 usage page 0xFF00 / none of the matching "
+                   "hidraw nodes exposes usage page 0xFF00 (device without a vendor interface?)"))
+        print(_warn("请用 `--list` 复查节点角色 / use `--list` to inspect node roles"))
+        print(HINT_NOT_FOUND)
         return None, 2
 
-    print(_ok("通过 hidraw 后备通道打开设备 / opened via hidraw fallback: %s (sysfs: %s)"
-              % (node, source)))
-    return device, None
+    # sysfs report descriptors unavailable: probe each candidate with INFO.
+    # The vendor interface answers "OK INFO"; the keyboard interface STALLs the
+    # Feature request.  Unknown nodes are probed before known keyboard nodes.
+    for node, source in unknown + other:
+        device = _probe_vendor_node(node)
+        if device is not None:
+            print(_ok("通过 hidraw 后备通道打开厂商接口 / opened the vendor interface via hidraw "
+                      "fallback: %s (probed INFO; sysfs: %s)" % (node, source)))
+            return device, None
+
+    print(_err("未能定位厂商 Feature 接口 / could not locate the vendor Feature interface "
+               "(sysfs report_descriptor unavailable, INFO probe answered by none of %d node(s))"
+               % len(unknown + other)))
+    print(_warn("请用 `--list` 复查节点与权限 / use `--list` to inspect nodes & permissions"))
+    print(HINT_NOT_FOUND)
+    return None, 2
 
 
 def open_device(hid_module):
@@ -614,7 +789,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--probe", action="store_true",
                         help="打开设备并发送 INFO 检查在线 / open the device and send INFO")
     parser.add_argument("--list", dest="list_devices", action="store_true",
-                        help="列出 HID/hidraw 候选 (调试用) / list HID/hidraw candidates")
+                        help="列出 HID/hidraw 候选并标出厂商接口 "
+                             "(usage page 0xFF00 / INFO-capable) / list HID/hidraw candidates "
+                             "and mark the vendor interface")
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, metavar="N",
                         help="轮询次数 / poll retries (default: %(default)s)")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, metavar="SEC",

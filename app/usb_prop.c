@@ -118,6 +118,18 @@ ONE_DESCRIPTOR CustomHID_Hid_Descriptor =
     CUSTOMHID_SIZ_HID_DESC
   };
 
+ONE_DESCRIPTOR CustomHID_Vendor_Report_Descriptor =
+  {
+    (uint8_t*)CustomHID_VendorReportDescriptor,
+    CUSTOMHID_SIZ_VENDOR_REPORT_DESC
+  };
+
+ONE_DESCRIPTOR CustomHID_Hid_Descriptor1 =
+  {
+    (uint8_t*)CustomHID_ConfigDescriptor + CUSTOMHID_OFF_HID_DESC1,
+    CUSTOMHID_SIZ_HID_DESC
+  };
+
 ONE_DESCRIPTOR String_Descriptor[4] =
   {
     {(uint8_t*)CustomHID_StringLangID, CUSTOMHID_SIZ_STRING_LANGID},
@@ -132,6 +144,8 @@ ONE_DESCRIPTOR String_Descriptor[4] =
 /*CustomHID_SetReport_Feature function prototypes*/
 uint8_t *CustomHID_SetReport_Feature(uint16_t Length);
 uint8_t *CustomHID_GetReport(uint16_t Length);
+uint8_t *CustomHID_GetVendorReportDescriptor(uint16_t Length);
+uint8_t *CustomHID_GetHIDDescriptor1(uint16_t Length);
 
 /* Extern function prototypes ------------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
@@ -236,6 +250,13 @@ void CustomHID_Reset(void)
   SetEPTxAddr(ENDP1, ENDP1_TXADDR);
   SetEPTxCount(ENDP1, 8);
   SetEPTxStatus(ENDP1, EP_TX_NAK);
+
+  /* Initialize Endpoint 2 (vendor interface interrupt IN): never used for
+     data, stays NAK so the host's IN polls are answered with NAK */
+  SetEPType(ENDP2, EP_INTERRUPT);
+  SetEPTxAddr(ENDP2, ENDP2_TXADDR);
+  SetEPTxCount(ENDP2, 8);
+  SetEPTxStatus(ENDP2, EP_TX_NAK);
 
   /* Set this device to response on default address */
   SetDeviceAddress(0);
@@ -379,10 +400,14 @@ void CustomHID_Status_Out (void)
 RESULT CustomHID_Data_Setup(uint8_t RequestNo)
 {
   uint8_t *(*CopyRoutine)(uint16_t);
+  uint8_t iface;
   
-  if (pInformation->USBwIndex != 0) 
+  /* wIndex low byte selects the HID interface (0 = boot keyboard, 1 = vendor
+     Feature); the high byte must be zero. */
+  if ((pInformation->USBwIndex1 != 0) || (pInformation->USBwIndex0 > 1))
     return USB_UNSUPPORT;    
-  
+
+  iface = pInformation->USBwIndex0;
   CopyRoutine = NULL;
   
   if ((RequestNo == GET_DESCRIPTOR)
@@ -392,11 +417,13 @@ RESULT CustomHID_Data_Setup(uint8_t RequestNo)
     
     if (pInformation->USBwValue1 == REPORT_DESCRIPTOR)
     {
-      CopyRoutine = CustomHID_GetReportDescriptor;
+      CopyRoutine = (iface == 0) ? CustomHID_GetReportDescriptor
+                                 : CustomHID_GetVendorReportDescriptor;
     }
     else if (pInformation->USBwValue1 == HID_DESCRIPTOR_TYPE)
     {
-      CopyRoutine = CustomHID_GetHIDDescriptor;
+      CopyRoutine = (iface == 0) ? CustomHID_GetHIDDescriptor
+                                 : CustomHID_GetHIDDescriptor1;
     }
     
   } /* End of GET_DESCRIPTOR */
@@ -404,15 +431,34 @@ RESULT CustomHID_Data_Setup(uint8_t RequestNo)
   /*** GET_PROTOCOL, GET_REPORT, SET_REPORT ***/
   else if ( (Type_Recipient == (CLASS_REQUEST | INTERFACE_RECIPIENT)) )
   {         
+    /* Report type (wValue high byte): 1 = Input, 2 = Output, 3 = Feature.
+       Interface 0 carries Input (keyboard) and Output (LED) reports;
+       interface 1 carries only the 48-byte vendor Feature report. */
+    uint8_t rtype = pInformation->USBwValue1;
+
     switch( RequestNo )
     {
     case GET_PROTOCOL:
+      if (iface != 0)                /* boot protocol exists on the keyboard only */
+      {
+        return USB_UNSUPPORT;
+      }
       CopyRoutine = CustomHID_GetProtocolValue;
       break;
     case GET_REPORT:
+      if ((iface == 0) ? ((rtype != 1) && (rtype != 2))
+                       : (rtype != 3))
+      {
+        return USB_UNSUPPORT;
+      }
       CopyRoutine = CustomHID_GetReport;
       break;
     case SET_REPORT:
+      if ((iface == 0) ? ((rtype != 1) && (rtype != 2))
+                       : (rtype != 3))
+      {
+        return USB_UNSUPPORT;
+      }
       CopyRoutine = CustomHID_SetReport_Feature;
       Request = SET_REPORT;
       break;
@@ -578,6 +624,30 @@ uint8_t *CustomHID_GetHIDDescriptor(uint16_t Length)
 }
 
 /*******************************************************************************
+* Function Name  : CustomHID_GetVendorReportDescriptor.
+* Description    : Gets the interface 1 (vendor HID) report descriptor.
+* Input          : Length
+* Output         : None.
+* Return         : The address of the vendor report descriptor.
+*******************************************************************************/
+uint8_t *CustomHID_GetVendorReportDescriptor(uint16_t Length)
+{
+  return Standard_GetDescriptorData(Length, &CustomHID_Vendor_Report_Descriptor);
+}
+
+/*******************************************************************************
+* Function Name  : CustomHID_GetHIDDescriptor1.
+* Description    : Gets the interface 1 (vendor HID) HID descriptor.
+* Input          : Length
+* Output         : None.
+* Return         : The address of the HID descriptor inside the config blob.
+*******************************************************************************/
+uint8_t *CustomHID_GetHIDDescriptor1(uint16_t Length)
+{
+  return Standard_GetDescriptorData(Length, &CustomHID_Hid_Descriptor1);
+}
+
+/*******************************************************************************
 * Function Name  : CustomHID_GetReport.
 * Description    : Returns the current 8-byte keyboard input report.
 * Input          : Length
@@ -637,7 +707,7 @@ RESULT CustomHID_Get_Interface_Setting(uint8_t Interface, uint8_t AlternateSetti
   {
     return USB_UNSUPPORT;
   }
-  else if (Interface > 0)
+  else if (Interface > 1)
   {
     return USB_UNSUPPORT;
   }

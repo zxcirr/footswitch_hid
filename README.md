@@ -42,7 +42,7 @@ footswitch_hid/
 ## 整体框架
 
 - **分层**:`src/`(产品逻辑)→ `app/`(USB 应用层)→ `lib/`(USB 设备栈 + CMSIS);`lib/` 不感知产品逻辑,可整体替换。
-- **USB 形态**:以 boot 键盘枚举(EP0 控制 64B + EP1 中断 IN 8B);报告描述符在键盘集合后追加一个厂商集合,承载 48 字节 Feature 报告命令通道,无 report ID、不增加端点。
+- **USB 形态**:以 HID 设备枚举,**两个 USB 接口**(每个接口各自只含一个顶层 Application 集合,均无 report ID):**接口 0 = boot 键盘**(class 3/sub 1/proto 1,自有 63 字节报告描述符,EP1 中断 IN 8B);**接口 1 = 厂商 HID**(class 3/sub 0/proto 0,自有 19 字节报告描述符,usage page 0xFF00 的 48 字节 Feature 通道,EP2 中断 IN 8B 永不发送、仅回 NAK)。Windows HidUsb 按**接口**解析 HID:每个接口各自单集合,因此无需 report ID(多顶层集合且无 report ID 会被拒绝,STATUS_COULD_NOT_INTERPRET);厂商集合因此成为独立 HID 设备对象,hidapi/hidraw 可正常打开(无需 `\KBD` 之类 hack);设备版本(bcdDevice)为 **0.03**。
 - **主循环**:`main.c` 每 1ms 采样 PB9/PB8/PB7(内部上拉、按下为低电平),积分消抖后把按键填入 8 字节键盘报告,仅在内容变化时发送。
 - **改键数据流**:主机 `Set_Report(Feature)` → `app/usb_prop.c` 收帧 → `app/cmd.c` 解析并更新 RAM 键位表 → 键盘报告立即使用新键码;`SAVE` 才由主循环写入 Flash。
 - **持久化**:上电时 `app/cfg_flash.c` 校验并加载配置页,非法则回落默认值,因此改键可跨重启保留。

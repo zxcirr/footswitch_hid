@@ -40,7 +40,10 @@
 /* EP_NUM */
 /* defines how many endpoints are used by the device */
 /*-------------------------------------------------------------*/
-#define EP_NUM     (2)
+/* 3 = EP0 control + EP1 keyboard IN + EP2 vendor IN.  Device_Table's
+ * Total_Endpoint gates endpoint requests in usb_core.c (rEP >= Total_Endpoint),
+ * so EP2 control transfers are rejected unless EP_NUM covers it. */
+#define EP_NUM     (3)
 
 /*-------------------------------------------------------------*/
 /* --------------   Buffer Description Table  -----------------*/
@@ -58,6 +61,12 @@
 /* tx buffer base address */
 #define ENDP1_TXADDR        (0x100)
 #define ENDP1_RXADDR        (0x104)
+
+/* EP2  */
+/* tx buffer base address (8 bytes: 0x110..0x117; clear of EP0's 0x18..0x97
+ * and EP1's 0x100..0x10B.  PMA addresses are byte offsets - proven by
+ * EP0 0x18 + 64 = 0x58). */
+#define ENDP2_TXADDR        (0x110)
 
 /*-------------------------------------------------------------*/
 /* -------------------   ISTR events  -------------------------*/
