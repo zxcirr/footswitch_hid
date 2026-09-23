@@ -131,6 +131,17 @@ python3 host_test/pedalctl.py info         # 固件版本 / 当前键位 / 是�
 
 **4. 临时禁用某个踏板**:`python3 host_test/pedalctl.py set 2 0x00`(键码 `0x00` 表示不输出任何按键)。
 
+**5. Windows 上改键(uv)**
+
+```bash
+cd host_test
+uv run python win_remap.py            # 诊断:列出 hidapi 条目 + 探测设备 + 给出后续命令
+uv run python win_remap.py set 1 0x04
+uv run python win_remap.py get && uv run python win_remap.py save
+```
+
+> Windows/macOS 需要 `hidapi`(已按平台在 `pyproject.toml` 声明,`uv` 会自动安装);Linux 上可回退到 `/dev/hidraw`,无需安装。
+
 ## 待补充
 
 - 三个开关的实际接线照片与线序确认(当前仅依据 P4 排针定义)。
