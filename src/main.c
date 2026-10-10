@@ -3,15 +3,19 @@
  *
  * 接线: 三个开关一端 -> PB9/PB8/PB7 (P4 排针 4/5/6), 公共端 -> GND (P4-2)。
  *       内部上拉, 按下为低电平。踩下 = 发送 HID 键码 1/2/3, 松开 = 释放。
+ *       踏板可配置为宏模式: 踩住期间按步骤序列循环按键 (见 app/cmd.h 协议,
+ *       引擎在 app/macro.c)。
  *
  * 本文件负责: 72MHz 时钟、GPIO、1ms SysTick、积分消抖、8 字节 boot keyboard
- * 报告组装、LED 状态指示。USB 协议栈在 app/ 中 (ST 官方 USB FS 设备库)。
+ * 报告组装 (单键 + 宏引擎合并)、LED 状态指示、SAVE 落盘服务。USB 协议栈在
+ * app/ 中 (ST 官方 USB FS 设备库)。
  */
 
 #include <stdint.h>
 
 #include "config.h"
 #include "cmd.h"
+#include "macro.h"
 #include "cfg.h"
 #include "usb_app.h"
 
@@ -63,6 +67,10 @@ volatile uint32_t key_event_count;        /* 消抖后接受的开关变化次�
 volatile uint8_t  usb_configured_mirror;  /* usb_app_is_configured() 镜像 */
 
 static uint32_t key_flash_until_ms;       /* LED 按键闪亮截止时间 */
+
+/* ===== 宏引擎状态 (每踏板一份; 仅主循环访问, 无需临界区) ===== */
+static macro_state_t macro_st[3];
+static uint8_t macro_mode_prev[3];        /* 检测模式切换 -> macro_reset() */
 
 /* ===== 开关状态 ===== */
 typedef struct
@@ -176,6 +184,36 @@ static void report_store(const uint8_t *report)
     }
 }
 
+/* ===== 踏板配置比较 (SAVE 竞态检测: 擦写期间 SET/MAC 是否改写了 RAM) ===== */
+static uint8_t pedal_equal(const cmd_pedal_t *a, const cmd_pedal_t *b)
+{
+    if ((a->mode != b->mode) || (a->code != b->code) ||
+        (a->press_ms != b->press_ms) || (a->gap_ms != b->gap_ms) ||
+        (a->step_count != b->step_count))
+    {
+        return 0u;
+    }
+    for (uint8_t s = 0u; s < CMD_MACRO_MAX_STEPS; s++)
+    {
+        if ((a->mod_mask[s] != b->mod_mask[s]) || (a->keycode[s] != b->keycode[s]))
+        {
+            return 0u;
+        }
+    }
+    return 1u;
+}
+
+/* 临界区内快照全部三踏板配置 */
+static void pedal_snapshot(cmd_pedal_t snap[CMD_KEY_COUNT])
+{
+    __disable_irq();
+    for (uint8_t i = 0u; i < CMD_KEY_COUNT; i++)
+    {
+        cmd_get_pedal(i, &snap[i]);
+    }
+    __enable_irq();
+}
+
 int main(void)
 {
     uint32_t last_scan = 0u;
@@ -185,8 +223,13 @@ int main(void)
     gpio_init();
     systick_init(72000u);      /* 72MHz / 72000 = 1ms */
     sw_init();
-    cmd_init();                /* 默认 0x1E/0x1F/0x20 */
-    (void)cfg_load();          /* 成功时经 cmd_set_keymap() 覆盖默认值 */
+    cmd_init();                /* 默认单键 0x1E/0x1F/0x20, 宏时序 30/30ms */
+    for (uint8_t i = 0u; i < 3u; i++)
+    {
+        macro_reset(&macro_st[i]);
+        macro_mode_prev[i] = CMD_MODE_SINGLE;
+    }
+    (void)cfg_load();          /* 成功时经 cmd_set_pedal() 覆盖默认值 (v1 镜像自动迁移) */
     usb_app_init();            /* 断开脉冲 + USB 协议栈启动 */
 
     for (;;)
@@ -194,33 +237,30 @@ int main(void)
         /* --- SAVE 服务: 擦写 flash 会阻塞取指 ~20-40ms, 只能在主循环执行 --- */
         if (feature_save_pending != 0u)
         {
-            uint8_t km_save[CMD_KEY_COUNT];
-            uint8_t km_changed = 0u;
+            cmd_pedal_t snap[CMD_KEY_COUNT];
+            cmd_pedal_t live[CMD_KEY_COUNT];
+            uint8_t image[CFG_IMAGE_LEN];
+            uint8_t changed = 0u;
 
             feature_save_pending = 0u;
 
-            /* Snapshot before the ~20-40 ms flash write: a SET landing while
-            we are erasing must not be marked as saved. */
-            __disable_irq();
-            for (uint8_t i = 0u; i < CMD_KEY_COUNT; i++)
-            {
-                km_save[i] = cmd_keycode(i);
-            }
-            __enable_irq();
+            /* 在 ~20-40ms 的擦写之前快照: 擦写期间到达的 SET/MAC 不能被
+             * 误标为 "已保存"。镜像由快照构建, 擦写只烧这份快照。 */
+            pedal_snapshot(snap);
+            cfg_image_build(image, snap);
 
-            if (cfg_save() == 0u)
+            if (cfg_save(image) == 0u)
             {
-                __disable_irq();
+                pedal_snapshot(live);
                 for (uint8_t i = 0u; i < CMD_KEY_COUNT; i++)
                 {
-                    if (cmd_keycode(i) != km_save[i])
+                    if (pedal_equal(&live[i], &snap[i]) == 0u)
                     {
-                        km_changed = 1u;
+                        changed = 1u;
                     }
                 }
-                __enable_irq();
 
-                if (km_changed == 0u)
+                if (changed == 0u)
                 {
                     cmd_save_done();       /* RAM still equals the flash image */
                 }
@@ -266,39 +306,65 @@ int main(void)
             }
         }
 
-        /* --- 快照运行时键表: SET 命令可能在 USB 中断里改写 --- */
-        uint8_t km[CMD_KEY_COUNT];
-        __disable_irq();
-        for (uint8_t i = 0; i < CMD_KEY_COUNT; i++)
-        {
-            km[i] = cmd_keymap[i];
-        }
-        __enable_irq();
+        /* --- 快照运行时配置: SET/MAC/MTIM 可能在 USB 中断里改写 --- */
+        cmd_pedal_t ped[CMD_KEY_COUNT];
+        pedal_snapshot(ped);
 
-        /* --- 组装 8 字节 boot keyboard 报告 (键码来自运行时键表) --- */
+        /* --- 组装 8 字节 boot keyboard 报告 ---
+         * 单键踏板: 按住 = 键按下 (修饰键码 -> byte0 位图, 普通键 -> 6 键槽)。
+         * 宏踏板: 引擎按步骤循环输出当前和弦; 松开立即归零 (不卡键)。
+         * 三踏板贡献合并进同一报告: 修饰键 OR, 键依次入槽 (最多 3+3=6 键,
+         * 恰好用满 6 键槽)。 */
         for (uint8_t i = 0; i < HID_REPORT_LEN; i++)
         {
             report[i] = 0u;
         }
         for (uint8_t i = 0; i < 3u; i++)
         {
-            if (sw[i].stable != 0u)
-            {
-                uint8_t code = km[i];
+            uint8_t mask = 0u;
+            uint8_t key = 0u;
 
-                if (code == 0x00u)
+            if (ped[i].mode == CMD_MODE_MACRO)
+            {
+                if (macro_mode_prev[i] != CMD_MODE_MACRO)
                 {
-                    continue;      /* 禁用的踏板不发键 */
+                    macro_reset(&macro_st[i]);   /* 模式切换: 从步骤 0 重新开始 */
+                    macro_mode_prev[i] = CMD_MODE_MACRO;
                 }
-                if ((code >= 0xE0u) && (code <= 0xE7u))
+                macro_tick(&macro_st[i], ped[i].mod_mask, ped[i].keycode,
+                           ped[i].step_count, ped[i].press_ms, ped[i].gap_ms,
+                           sw[i].stable, now, &mask, &key);
+            }
+            else
+            {
+                macro_mode_prev[i] = CMD_MODE_SINGLE;
+                if (sw[i].stable != 0u)
                 {
-                    report[0] |= (uint8_t)(1u << (code - 0xE0u));   /* 修饰键 -> byte 0 */
+                    uint8_t code = ped[i].code;
+
+                    if (code == 0x00u)
+                    {
+                        continue;      /* 禁用的踏板不发键 */
+                    }
+                    if ((code >= 0xE0u) && (code <= 0xE7u))
+                    {
+                        mask = (uint8_t)(1u << (code - 0xE0u));  /* 修饰键 -> byte 0 */
+                    }
+                    else
+                    {
+                        key = code;                                /* 普通键 -> 6 键数组 */
+                    }
                 }
-                else if (idx < HID_REPORT_LEN)
-                {
-                    report[idx] = code;                            /* 普通键 -> 6 键数组 */
-                    idx++;
-                }
+            }
+
+            if (mask != 0u)
+            {
+                report[0] |= mask;
+            }
+            if ((key != 0u) && (idx < HID_REPORT_LEN))
+            {
+                report[idx] = key;
+                idx++;
             }
         }
 
