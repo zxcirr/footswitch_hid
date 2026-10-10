@@ -68,8 +68,14 @@ NEXT_COMMANDS = """\
        uv run python win_remap.py get          # 读取当前映射 / read current mapping
        uv run python win_remap.py save         # 写入 Flash 才会持久化 / persist to flash
        uv run python win_remap.py reset        # 恢复默认 1/2/3 (仅 RAM) / restore defaults (RAM)
+       uv run python win_remap.py mac 1 shift z c   # 踏板1 = 踩住循环 Shift->Z->C / cycle while held
+       uv run python win_remap.py tim 1 15 15       # 宏时序: 每步按下/间隔 15ms / macro timing
+       uv run python win_remap.py mget 1            # 查看踏板1宏步骤 / show pedal 1's macro steps
      注意 / note: 改键后必须 save 才能跨重启保留; reset + save 恢复默认 1/2/3 /
-     run save to persist; reset followed by save restores 1/2/3."""
+     run save to persist; reset followed by save restores 1/2/3.
+     宏步骤说明 / macro steps: 名称 shift/ctrl/alt/gui, a-z, 0-9, f1-f12 或原始十六进制
+     (02:1D = Shift+Z 和弦, 1D = 单键 z, 02:00 = 只按 Shift); 组合步用 "+" (shift+z),
+     每踏板最多 6 步; 松开踏板立即停。"""
 
 
 def _reconfigure_streams() -> None:

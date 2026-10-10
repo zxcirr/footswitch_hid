@@ -102,8 +102,24 @@ flash: $(BIN)
 	$(PYOCD) flash -t $(TARGET_TYPE) -e sector $<
 
 # 主机端描述符测试
+HOST_CC = gcc
+HOST_CFLAGS = -std=c11 -Wall -Wextra -Wshadow -Iapp
+
 test:
+	@mkdir -p $(BUILD_DIR)
+	@echo "== 描述符校验 / descriptor checks =="
 	python3 host_test/test_descriptors.py
+	@echo ""
+	@echo "== cmd.c 单测 / cmd.c unit tests =="
+	$(HOST_CC) $(HOST_CFLAGS) host_test/test_cmd.c app/cmd.c -o $(BUILD_DIR)/test_cmd
+	$(BUILD_DIR)/test_cmd
+	@echo ""
+	@echo "== macro.c 单测 / macro.c unit tests =="
+	$(HOST_CC) $(HOST_CFLAGS) host_test/test_macro.c app/macro.c -o $(BUILD_DIR)/test_macro
+	$(BUILD_DIR)/test_macro
+	@echo ""
+	@echo "== pedalctl 语义单测 / pedalctl semantics tests =="
+	python3 host_test/test_pedalctl_semantics.py
 
 # 调试 (启动 GDB server)
 debug:

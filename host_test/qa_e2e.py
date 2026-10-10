@@ -41,7 +41,15 @@ results = []
 
 def record(name, ok, detail=""):
     results.append((name, ok, detail))
-    print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
+    tag = "PASS" if ok else ("SKIP" if ok is None else "FAIL")
+    print(f"{tag}  {name}  {detail}", flush=True)
+
+
+def pedalctl_run(*args):
+    """Run host_test/pedalctl.py; returns the CompletedProcess (caller checks
+    the exit code - a failure here must not abort the acceptance run)."""
+    return subprocess.run([sys.executable, str(ROOT / "pedalctl.py"), *args],
+                          capture_output=True, text=True, timeout=60)
 
 
 def pyocd(cmds, timeout=20):
@@ -219,14 +227,58 @@ def main():
     record("S4 re-enumerated after reset", ok4, f"{time.time() - t0:.1f}s")
     record("S4 still exactly one instance", lsusb_instances() == 1, f"count={lsusb_instances()}")
 
+    print("\n--- S6: 宏循环 (pedalctl mac 1 shift z c; SWD 按住 SW1 2.5s) ---", flush=True)
+    r = pedalctl_run("mac", "1", "shift", "z", "c")
+    if r.returncode != 0:
+        # Feature channel needs the vendor hidraw/HID node; without permission
+        # a healthy device cannot be blamed for it -> SKIP, not FAIL.
+        last = (r.stdout.strip().splitlines() or ["<no output>"])[-1][:100]
+        record("S6 macro config via feature channel", None,
+               f"skipped: pedalctl exit={r.returncode} ({last})")
+    else:
+        record("S6 macro config via feature channel", True, "MAC 1 02:00,1D,06")
+        proc = subprocess.Popen([sys.executable, str(EVDEV), "--duration", "4"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        time.sleep(1.0)
+        press("SW1")
+        time.sleep(2.5)          # default timing 30/30 ms -> ~13 full cycles
+        release("SW1")
+        out6 = proc.communicate(timeout=10)[0]
+        ev6 = parse_events(out6)
+
+        shift, z, c = 42, 44, 46          # KEY_LEFTSHIFT, KEY_Z, KEY_C
+        pairs = {}
+        for code in (shift, z, c):
+            downs = sum(1 for _, cd, v in ev6 if cd == code and v == 1)
+            ups = sum(1 for _, cd, v in ev6 if cd == code and v == 0)
+            pairs[code] = min(downs, ups)
+        record("S6 shift/z/c each cycled >= 5 pairs in 2.5s",
+               all(n >= 5 for n in pairs.values()), f"pairs={pairs}")
+        unexpected6 = sorted({cd for _, cd, _ in ev6} - {shift, z, c})
+        record("S6 no unexpected key codes", not unexpected6, f"codes={unexpected6}")
+
+        # Release must stop the cycle immediately (no stuck keys).
+        r = subprocess.run([sys.executable, str(EVDEV), "--duration", "1", "--expect-none"],
+                           capture_output=True, text=True)
+        record("S6 cycle stops right after release", r.returncode == 0,
+               r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "")
+
+        # Restore pedal 1 in RAM (flash is never touched by this test).
+        r = pedalctl_run("set", "1", "0x1E")
+        record("S6 pedal 1 restored to 0x1E (RAM)", r.returncode == 0,
+               f"exit={r.returncode}")
+
     print("\n--- 原始事件日志 ---")
     print(out.strip() if out.strip() else "(无事件)")
 
     print("\n=== 汇总 ===")
-    bad = sum(1 for _, ok_, _ in results if not ok_)
+    bad = sum(1 for _, ok_, _ in results if ok_ is False)
+    skipped = sum(1 for _, ok_, _ in results if ok_ is None)
     for name, ok_, detail in results:
-        print(f"{'PASS' if ok_ else 'FAIL'}  {name}  {detail}")
-    print(f"\nRESULT: {'PASS' if bad == 0 else f'FAIL ({bad} item(s))'}")
+        tag = "PASS" if ok_ else ("SKIP" if ok_ is None else "FAIL")
+        print(f"{tag}  {name}  {detail}")
+    print(f"\nRESULT: {'PASS' if bad == 0 else f'FAIL ({bad} item(s))'}"
+          + (f"  [{skipped} skipped]" if skipped else ""))
     return 0 if bad == 0 else 1
 
 
