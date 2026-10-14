@@ -21,7 +21,7 @@ directory - no protocol logic is duplicated here.
         python pedalctl.py set 1 0x04
 
 用法 / usage:
-    cd host_test
+    cd pedal_panel
     uv run python win_remap.py              # 诊断向导 / diagnostic guide
     uv run python win_remap.py set 1 0x04   # 改键 / remap pedal 1 to 'a'
     uv run python win_remap.py get
@@ -57,7 +57,7 @@ except Exception as exc:  # never crash: report and exit 2
 REMEDY_MISSING_HIDAPI = """\
 hidapi 未安装 / hidapi is not installed:
   * Windows 上必须安装 (没有 /dev/hidraw 后备通道) / REQUIRED on Windows (no /dev/hidraw fallback):
-      cd host_test && uv run python win_remap.py     (uv 会自动安装 / uv installs it)
+      cd pedal_panel && uv run python win_remap.py     (uv 会自动安装 / uv installs it)
       py -m pip install hidapi                       (不用 uv 时 / without uv)
   * Linux 上可选: 未安装时会回退到 /dev/hidraw ioctl / optional on Linux (falls back to /dev/hidraw)
   * macOS 上同样需要 hidapi / also required on macOS"""

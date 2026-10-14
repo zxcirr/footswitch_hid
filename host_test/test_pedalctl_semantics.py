@@ -7,7 +7,9 @@ import io
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# pedalctl.py lives in the self-contained pedal_panel/ (the desktop tool);
+# the test imports it from there so a single copy stays tested and shipped.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pedal_panel"))
 import pedalctl  # noqa: E402
 
 

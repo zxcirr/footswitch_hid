@@ -11,8 +11,9 @@
   * 持久化 (写 Flash), 恢复默认, 读取当前配置, 固件版本 + 未保存提示
   * 键位捕获: 点 [捕获按键] 后按物理键, 从 Tk 键事件翻译 HID 码 (窗口内捕获)
 
-设备通信复用 host_test/pedalctl.py 的 api_* 数据层与打开逻辑
-(hidapi / hidraw 回退)。设计文档: pedal_panel/README.md。
+设备通信复用同目录 pedalctl.py 的 api_* 数据层与打开逻辑
+(hidapi / hidraw 回退)。本目录完全自包含, 可整体拷贝到 Windows 使用。
+设计文档: pedal_panel/README.md。
 
 用法 / usage:
     python pedal_panel.py              # 启动界面 / launch the UI
@@ -24,11 +25,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import sys
 import threading
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "host_test"))
+# 同目录导入 pedalctl (本目录自包含, 可从任意位置运行/整体拷贝到 Windows)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 import pedalctl
 

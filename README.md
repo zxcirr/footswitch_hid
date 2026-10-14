@@ -20,8 +20,8 @@ footswitch_hid/
 ├── lib/          第三方代码(原样引入,请勿修改)
 │   ├── st_usbfs/   ST USB FS 设备库 V4.0.0
 │   └── cmsis/      CMSIS 内核与 STM32F10x 头文件
-├── host_test/    主机侧测试与工具(Python + C)
-├── pedal_panel/  图形上位机(Tkinter, 键位/宏在线配置; 见其 README.md)
+├── host_test/    主机侧测试(描述符 / C 单测 / 语义单测 / 端到端验收)
+├── pedal_panel/  上位机(自包含,可整体拷去 Windows):Tkinter GUI + pedalctl.py CLI + win_remap.py
 ├── Makefile      构建 / 烧录 / 测试 / 调试入口
 └── .gitignore
 ```
@@ -38,8 +38,8 @@ footswitch_hid/
 | `app/macro.c` | 宏播放引擎:踩住踏板按步骤循环按键,松开立即释放;纯逻辑,可主机单测 |
 | `app/cfg_flash.c` | 配置页(Flash 最后一页,64 字节 v2 镜像)读写与上电加载,自动迁移 v1 旧镜像 |
 | `lib/` | 第三方代码,**不要修改**:`st_usbfs` 为 USB 设备栈,`cmsis` 为内核头文件 |
-| `host_test/` | 主机侧工具与测试:描述符校验、命令单测、按键抓取、在线改键、端到端验收 |
-| `pedal_panel/` | 图形上位机(Tkinter):三踏板单键/宏/时序在线配置、捕获按键、保存到 Flash;`--self-test` 纯逻辑自测 |
+| `host_test/` | 主机侧测试:描述符校验、cmd/macro C 单测、pedalctl 语义单测、端到端验收(qa_e2e) |
+| `pedal_panel/` | 上位机目录,自包含可整体拷贝:图形界面 `pedal_panel.py`(单键/宏/时序/捕获按键/保存 Flash) + CLI 工具 `pedalctl.py` / `win_remap.py`;`--self-test` 纯逻辑自测 |
 | `Makefile` | `make` / `make flash` / `make test` / `make debug` / `make clean` |
 
 ## 整体框架
@@ -121,36 +121,36 @@ make debug            # 启动 pyocd gdbserver(GDB 调试)
 **1. 在线改键(无需重新编译)**
 
 ```bash
-python3 host_test/pedalctl.py set 1 0x04   # 踏板 1 → 'a'
-python3 host_test/pedalctl.py get          # 读当前映射
-python3 host_test/pedalctl.py save         # 写入 Flash,重启后仍生效
+python3 pedal_panel/pedalctl.py set 1 0x04   # 踏板 1 → 'a'
+python3 pedal_panel/pedalctl.py get          # 读当前映射
+python3 pedal_panel/pedalctl.py save         # 写入 Flash,重启后仍生效
 ```
 
 **2. 恢复默认键位**
 
 ```bash
-python3 host_test/pedalctl.py reset        # 恢复 1/2/3(仅 RAM)
-python3 host_test/pedalctl.py save         # 需要持久化时再执行
+python3 pedal_panel/pedalctl.py reset        # 恢复 1/2/3(仅 RAM)
+python3 pedal_panel/pedalctl.py save         # 需要持久化时再执行
 ```
 
 **3. 查看设备状态**
 
 ```bash
-python3 host_test/pedalctl.py --probe      # 设备是否在线
-python3 host_test/pedalctl.py info         # 固件版本 / 当前键位 / 是否有未保存修改
+python3 pedal_panel/pedalctl.py --probe      # 设备是否在线
+python3 pedal_panel/pedalctl.py info         # 固件版本 / 当前键位 / 是否有未保存修改
 ```
 
-**4. 临时禁用某个踏板**:`python3 host_test/pedalctl.py set 2 0x00`(键码 `0x00` 表示不输出任何按键)。
+**4. 临时禁用某个踏板**:`python3 pedal_panel/pedalctl.py set 2 0x00`(键码 `0x00` 表示不输出任何按键)。
 
 **5. 宏:踩住踏板循环按键(例如踩住 → `Shift → Z → C` 快速循环)**
 
 ```bash
-python3 host_test/pedalctl.py mac 1 shift z c    # 三个键依次独立快按,踩住期间循环
-python3 host_test/pedalctl.py mac 1 shift+z c    # 组合键步骤:Shift+Z 一起按,然后 C
-python3 host_test/pedalctl.py tim 1 15 15        # 每步按下 15ms、间隔 15ms(默认 30/30)
-python3 host_test/pedalctl.py mget 1             # 查看踏板 1 当前步骤
-python3 host_test/pedalctl.py tim 1              # 查看踏板 1 当前时序
-python3 host_test/pedalctl.py save               # 持久化,重启后仍是宏
+python3 pedal_panel/pedalctl.py mac 1 shift z c    # 三个键依次独立快按,踩住期间循环
+python3 pedal_panel/pedalctl.py mac 1 shift+z c    # 组合键步骤:Shift+Z 一起按,然后 C
+python3 pedal_panel/pedalctl.py tim 1 15 15        # 每步按下 15ms、间隔 15ms(默认 30/30)
+python3 pedal_panel/pedalctl.py mget 1             # 查看踏板 1 当前步骤
+python3 pedal_panel/pedalctl.py tim 1              # 查看踏板 1 当前时序
+python3 pedal_panel/pedalctl.py save               # 持久化,重启后仍是宏
 ```
 
 - 步骤写法:按键名(`shift`/`ctrl`/`alt`/`gui`、`a`-`z`、`0`-`9`、`f1`-`f12`、`space`/`enter`/`esc`/`tab`),组合键用 `+`(如 `shift+z`),或原始十六进制(`02:1D` = Shift+Z 和弦,`1D` = 单键 `z`,`02:00` = 只按 Shift);每踏板最多 6 步。
@@ -161,7 +161,7 @@ python3 host_test/pedalctl.py save               # 持久化,重启后仍是宏
 **6. Windows 上改键(uv)**
 
 ```bash
-cd host_test
+cd pedal_panel
 uv run python win_remap.py            # 诊断:列出 hidapi 条目 + 探测设备 + 给出后续命令
 uv run python win_remap.py set 1 0x04
 uv run python win_remap.py get && uv run python win_remap.py save

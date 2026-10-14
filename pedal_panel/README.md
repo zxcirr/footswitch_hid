@@ -46,7 +46,7 @@ pip install hidapi
 python pedal_panel/pedal_panel.py
 ```
 
-设备：VID `0x1209` / PID `0x0001`，通信走**接口 1 厂商 HID**（usage_page `0xFF00`）的 48 字节 Feature 通道。打开逻辑、应答严格匹配全部复用 `host_test/pedalctl.py`，不要重写。
+设备：VID `0x1209` / PID `0x0001`，通信走**接口 1 厂商 HID**（usage_page `0xFF00`）的 48 字节 Feature 通道。打开逻辑、应答严格匹配全部复用同目录 `pedalctl.py`，不要重写。
 
 ---
 
@@ -54,12 +54,14 @@ python pedal_panel/pedal_panel.py
 
 ```text
 footswitch_hid/
-├── host_test/
-│   └── pedalctl.py        # 已就绪：协议核心 + api_* 数据层（本文档第 4 节）
-├── pedal_panel/           # 本目录：上位机
-│   ├── pedal_panel.py     # 已实现：Tkinter 应用（单文件，纯逻辑 48 项自测通过）
-│   ├── pyproject.toml     # 已实现：uv 项目 + hidapi(win32) 依赖
-│   └── README.md          # 本文档
+├── host_test/             # 纯测试目录（描述符 / C 单测 / 语义单测 / qa_e2e）
+│   └── ...                # 从 ../pedal_panel 导入 pedalctl，测试与发布共用一份代码
+└── pedal_panel/           # 本目录 = 上位机，完全自包含：整体拷贝此目录即可到 Windows 运行
+    ├── pedal_panel.py     # Tkinter 图形界面（--self-test 纯逻辑自测 48 项）
+    ├── pedalctl.py        # 协议核心 + api_* 数据层 + CLI 改键工具（本文档第 4 节）
+    ├── win_remap.py       # Windows 诊断/改键 CLI 前端（转发 pedalctl）
+    ├── pyproject.toml     # uv 项目 + hidapi(win32) 依赖
+    └── README.md          # 本文档
 ```
 
 设计决定：**单文件** `pedal_panel.py`。逻辑（键映射、命令生成、collect/fill）做成模块级纯函数，`--self-test` 可在无显示环境（包括当前容器）回归。
@@ -68,7 +70,7 @@ footswitch_hid/
 
 ## 4. 已就绪的地基：`pedalctl.py` 数据层（M1 已完成 ✅）
 
-以下函数已在 `host_test/pedalctl.py` 实现并用伪设备实测通过（返回数据/元组，**不打印**）：
+以下函数已在同目录 `pedalctl.py` 实现并用伪设备实测通过（返回数据/元组，**不打印**）：
 
 | 函数 | 说明 | 返回（实测） |
 |---|---|---|
@@ -348,7 +350,7 @@ python3 host_test/test_pedalctl_semantics.py       # 现有语义测试保持绿
 
 ## 13. 附：当前仓库状态（2026-10-13 实现完毕）
 
-- `host_test/pedalctl.py`：数据层（第 4 节）已实现 ✅，`QUIET` 开关 ✅，api 语义 20 项用例 ✅
-- `pedal_panel/`：**已实现**（`pedal_panel.py` 单文件 + `pyproject.toml`），`--self-test` 48 项全过；真机交互待按 10.2 清单在 Windows 验证
+- `pedal_panel/`：**完全自包含**（GUI + CLI + 协议核心 + 文档），整体拷贝这一个目录到 Windows 即可运行；自动化验证 ✅（`--self-test` 48 项 + 伪设备 api 语义 20 项），真机交互待按 10.2 清单在 Windows 完成
+- `host_test/pedalctl.py`：已迁移至 `pedal_panel/pedalctl.py`（单一副本，`host_test` 的测试从 ../pedal_panel 导入，避免两份代码漂移）
 - 固件：宏功能完整（`mac/mget/tim` 协议 + `app/macro.c` 引擎），cmd 140 / macro 44 项单测绿；已通过 DAPLink 烧录并经 SWD 端到端验证（v1→v2 迁移、单键输出、宏三相位循环全部实测）
 - 远程 GitHub：`zxcirr/footswitch_hid` 单 `master` 分支（默认分支），干净单项目历史

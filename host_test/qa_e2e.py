@@ -46,9 +46,9 @@ def record(name, ok, detail=""):
 
 
 def pedalctl_run(*args):
-    """Run host_test/pedalctl.py; returns the CompletedProcess (caller checks
+    """Run pedal_panel/pedalctl.py; returns the CompletedProcess (caller checks
     the exit code - a failure here must not abort the acceptance run)."""
-    return subprocess.run([sys.executable, str(ROOT / "pedalctl.py"), *args],
+    return subprocess.run([sys.executable, str(ROOT.parent / "pedal_panel" / "pedalctl.py"), *args],
                           capture_output=True, text=True, timeout=60)
 
 
