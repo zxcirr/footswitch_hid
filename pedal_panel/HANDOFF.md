@@ -42,7 +42,8 @@ python -c "import pedalctl; print('fcntl =', pedalctl.fcntl)"   # 应打印 None
 | `2778a0a` | GUI 上位机 `pedal_panel.py` + `pedalctl.py` 新增 `api_*` 数据层（9 函数）+ `QUIET` 开关 + 48 项自测 + 20 项 api 语义用例 |
 | `b266901` | 目录拆分：**`pedal_panel/` = 上位机（自包含）**，`host_test/` = 纯测试；`pedalctl.py` 迁入 pedal_panel（单一副本防漂移） |
 | `a1569b5` | **Windows 兼容修复**：`fcntl` 条件导入 + hidraw 回退守卫（你的崩溃根因） |
-| `2af6222` | **描述符修复**：厂商 Feature 数据项补独立 Usage（19→21 字节）—— 修复 Windows MI_01 Code 10 / 0xC00000B9（hidapi 只见 MI_00 的根因）；`bcdDevice` 0.03→0.04 强制刷新 Windows 按 REV 缓存的失败解析；描述符校验器新增 Usage 池回归断言。**已重新烧录板子** |
+| `2af6222` | **描述符修复**：厂商 Feature 数据项补独立 Usage（19→21 字节）；描述符校验器新增 Usage 池回归断言 |
+| 本次 | **混编修复**：bcdDevice 0.04→**0.05**（`2af6222` 的构建产物混了旧 `usb_prop.o`, ONE_DESCRIPTOR 仍 19 字节 → 截断响应, MI_01 依旧 Code 10）；`Makefile` 加 `-MMD -MP` 头文件依赖根除复发；`test_descriptors.py` 的 `read_text` 显式 `encoding="utf-8"`（Windows GBK 兼容）；干净重建后字节取证(数组 21B / ONE_DESCRIPTOR=21 / dev=0.05 / HID1=0x15)全部通过, **已重烧板子** |
 
 ---
 
@@ -77,19 +78,21 @@ uv sync
 uv run python pedal_panel.py
 ```
 
-### 3.4 本次描述符修复后, Windows 侧会看到什么
+### 3.4 描述符修复后, Windows 侧会看到什么
 
-板子**已在 Linux 侧重新烧录**（bcdDevice 0.04, 配置页 v1 数据保留）。你需要:
+**重要**:第一版修复(bcdDevice 0.04)存在"链接期混编"缺陷——`Makefile` 无头文件依赖, 改 `usb_desc.h`(19→21) 后增量 `make` 没有重编 `usb_prop.o`, 烧录的固件向主机宣告 21 字节、`GET_DESCRIPTOR` 却只回 19 字节(截断), MI_01 因此仍 Code 10。**现在已修**:bcdDevice 升到 **0.0005**、`make clean && make` 全量重建(字节取证: 21B 数组 + ONE_DESCRIPTOR size=21 都在固件里)、Makefile 加 `-MMD -MP` 头文件依赖根除复发。板子已在 Linux 侧重新烧录(配置页 v1 数据保留)。你需要:
 
-1. 把踏板 micro-USB 重插到 Windows（或在设备管理器里拔禁用旧设备再插）。
-2. `bcdDevice` 变了 → Windows 把它当**新硬件实例**（REV_0004）重新解析，不会复用旧的失败缓存。
-3. 预期: 设备管理器中 `FootSwitch HID Pedal` 下两个接口都正常（MI_00 键盘 + MI_01 厂商, 无 ⚠ Code 10）。可选清理: 查看→显示隐藏设备, 卸载灰色的旧 REV_0003 残留实例。
-4. 验证命令（应枚举出 `usage_page=0xFF00 ... interface_number=1` 且 probe 应答 OK）:
+1. 把踏板 micro-USB 重插到 Windows。
+2. bcdDevice 变了 → Windows 把 REV_0005 当**新硬件实例**重新解析, 不复用 REV_0003/REV_0004 的失败缓存。
+3. 预期: 设备管理器 `FootSwitch HID Pedal` 下两个接口都正常(MI_00 键盘 + MI_01 厂商, 无 ⚠ Code 10)。可选: 查看→显示隐藏设备, 卸载灰色的 REV_0003/0004 残留实例。
+4. 验证命令(应枚举出 `usage_page=0xFF00 ... interface_number=1` 且 probe 应答 OK):
 
 ```powershell
 uv run python win_remap.py            # 诊断向导, 看列出的条目里有没有 interface_number=1
 uv run python win_remap.py --probe    # 应打印 OK INFO ...
 ```
+
+> Windows 上自己构建固件时(如有): 改任何 `.h` 后必须 `make clean && make`, 或确认 `build/**/*.d` 已生成(-MMD 生效)。`test_descriptors.py` 已改为显式 UTF-8 读源码, 不再受 GBK 默认编码影响。
 
 ---
 
@@ -117,7 +120,7 @@ uv run python win_remap.py --probe    # 应打印 OK INFO ...
 | `ModuleNotFoundError: fcntl` | 拷了旧版 pedalctl.py | 重拷; 用 3.2 表核对 |
 | `No module named tkinter` | 非 python.org 版 Python | 装官方 Python, 勾选 tcl/tk |
 | 红灯 + "未找到厂商 HID 条目" | 板子 USB 未插/仅供电线/未枚举 | 查设备管理器 1209:0001; 换线; `uv run python win_remap.py` 一键诊断 |
-| 只枚举到 `interface_number=0` / MI_01 Code 10 | 板上还是旧固件(厂商 Feature 无 Usage, Windows 拒启该接口) | 重烧 bcdDevice 0.04 固件(见 §3.4), Windows 侧重插 USB |
+| 只枚举到 `interface_number=0` / MI_01 Code 10 | 板子固件无效: 旧版(无 Feature Usage, REV≤0003)或混编版(REV_0004 宣告 21 只回 19) | 确认烧录 bcdDevice **0.05** 版; Windows 重插 USB(新 REV 强制重解析) |
 | `ERR range` / `ERR syntax` | 键码/步骤超出协议范围 | 对照 `README.md` 第 6/7 节约束 |
 | 保存超时 | 板子忙擦写/应答拖慢 | 等 1-2s 重试; 确认没同时开两个上位机 |
 | 改键后重启丢失 | 忘了保存 | 应用只写 RAM, 必须点「保存到 Flash」 |

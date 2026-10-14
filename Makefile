@@ -27,9 +27,11 @@ CFLAGS += -fno-common -fno-builtin -ffunction-sections -fdata-sections
 CFLAGS += -Os
 CFLAGS += -g3 -gdwarf-2  # 调试信息
 CFLAGS += -Isrc -Iapp -Ilib/st_usbfs/inc -Ilib/cmsis
+CFLAGS += -MMD -MP  # 自动生成头文件依赖(build/*.d), 防头文件改动漏重编致新旧混编
 
 ASFLAGS = -mcpu=$(CPU) -mthumb
 ASFLAGS += -g3 -gdwarf-2
+ASFLAGS += -MMD -MP  # 同 CFLAGS: startup.s 走 cpp, 也要跟踪其包含的头文件
 
 # 链接选项
 LDSCRIPT = src/linker.ld
@@ -126,3 +128,6 @@ debug:
 	$(PYOCD) gdbserver -t $(TARGET_TYPE)
 
 .PHONY: all clean size disasm flash test debug
+
+# 头文件依赖: 编译生成的 build/**/*.d 让任何 .h 改动正确触发重编 (防混编旧目标)
+-include $(OBJ:.o=.d)

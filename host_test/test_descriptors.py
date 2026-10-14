@@ -6,7 +6,7 @@ of ROOT/src/config.h (ROOT is the parent of this script's directory), then check
 them against the two-interface QMK/VIA-style layout:
 
   device_desc : 18 bytes, bLength=18, bDescriptorType=1, bcdUSB=0x0110,
-                bcdDevice=0x0004 (displayed 0.04; the revision was bumped so
+                bcdDevice=0x0005 (displayed 0.05; the revision was bumped so
                 Windows re-reads its cached descriptors), bDeviceClass=0,
                 bMaxPacketSize0=64, idVendor=0x1209, idProduct=0x0001,
                 bNumConfigurations=1, iManufacturer=1, iProduct=2,
@@ -203,15 +203,15 @@ def check_device_desc(arrays):
     check_u8(arr, 7, "bMaxPacketSize0", 64, problems)
     check_le16(arr, 8, "idVendor", 0x1209, problems)
     check_le16(arr, 10, "idProduct", 0x0001, problems)
-    # bcdDevice 0.04 = BCD 0x0004, stored little-endian as bytes {04,00}
-    check_le16(arr, 12, "bcdDevice", 0x0004, problems)
+    # bcdDevice 0.05 = BCD 0x0005, stored little-endian as bytes {05,00}
+    check_le16(arr, 12, "bcdDevice", 0x0005, problems)
     check_u8(arr, 17, "bNumConfigurations", 1, problems)
     check_u8(arr, 14, "iManufacturer", 1, problems)
     check_u8(arr, 15, "iProduct", 2, problems)
     check_u8(arr, 16, "iSerialNumber", 0, problems)
     if problems:
         return False, "%s: %s" % (arr.name, "; ".join(problems)), {}
-    return True, ("%s[18]: USB FS device descriptor, 1209:0001, bcdDevice=0.04, "
+    return True, ("%s[18]: USB FS device descriptor, 1209:0001, bcdDevice=0.05, "
                   "iManufacturer=1 iProduct=2 iSerialNumber=0") % arr.name, {}
 
 
@@ -756,7 +756,7 @@ def has_pin(text, pin):
 def check_keymap():
     if not CONFIG_H.exists():
         return False, "file not found: %s" % CONFIG_H, {}
-    text = strip_comments(CONFIG_H.read_text())
+    text = strip_comments(CONFIG_H.read_text(encoding="utf-8"))
     problems = []
     for pin in (9, 8, 7):
         if not has_pin(text, pin):
@@ -826,7 +826,7 @@ def main():
         print("RESULT: FAIL (0/%d checks)" % N_CHECKS)
         return 1
 
-    arrays = parse_arrays(USB_DESC_C.read_text())
+    arrays = parse_arrays(USB_DESC_C.read_text(encoding="utf-8"))
 
     passed = 0
 

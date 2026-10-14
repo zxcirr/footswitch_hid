@@ -22,10 +22,13 @@
   *     report IDs; that stays avoided via one-collection-per-interface.
   *   - no report IDs anywhere; the vendor collection is its own HID device
   *     object (Shared access, no \KBD hack)
-  *   - bcdDevice = 0.04 (rev bump: Windows caches descriptors per hardware ID
-  *     USB\VID_1209&PID_0001&REV_xxxx, so bumping the revision forces a fresh
-  *     read instead of reusing the stale cached copy - the cached REV_0003
-  *     copy contains the rejected vendor report descriptor)
+  *   - bcdDevice = 0.05 (rev bump: Windows caches parsed descriptors per
+  *     hardware ID USB\VID_1209&PID_0001&REV_xxxx. REV_0003 held the
+  *     usage-less Feature item; REV_0004 shipped TRUNCATED (link-time mix of
+  *     a fresh usb_desc.o with a stale usb_prop.o whose ONE_DESCRIPTOR still
+  *     answered 19 bytes for the 21-byte report). Both caches must be busted
+  *     by a new revision; header changes without `make clean` are now caught
+  *     by the Makefile's -MMD dependency tracking)
   *   - string descriptors: LANGID 0x0409, "FootSwitch" + "HID Pedal" (no serial)
   ******************************************************************************
   */
@@ -34,13 +37,13 @@
 #include "usb_desc.h"
 
 /* USB Standard Device Descriptor.
- * bcdDevice = 0x0004 ("0.04"): Windows caches the parsed descriptors per
- * hardware ID (USB\VID_1209&PID_0001&REV_xxxx); the revision bump makes Windows
- * re-read them instead of reusing the stale cached (failed) copy. */
+ * bcdDevice = 0x0005 ("0.05"): Windows caches the parsed descriptors per
+ * hardware ID (USB\VID_1209&PID_0001&REV_xxxx); every descriptor-content fix
+ * MUST bump this revision or Windows keeps reusing the cached (failed) parse. */
 const uint8_t CustomHID_DeviceDescriptor[CUSTOMHID_SIZ_DEVICE_DESC] =
 {
   0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x40,
-  0x09, 0x12, 0x01, 0x00, 0x04, 0x00, 0x01, 0x02,
+  0x09, 0x12, 0x01, 0x00, 0x05, 0x00, 0x01, 0x02,
   0x00, 0x01
 };
 
