@@ -190,6 +190,62 @@ check("probe <- 'OK INFO ...'", run(pedalctl.command_probe, d, 1, 0.0), 0)
 d = FakeDevice(["", "OK saved\n"])
 check("probe <- stale 'OK saved'", run(pedalctl.command_probe, d, 1, 0.0), 2)
 
+# --- api_* data layer (used by pedal_panel) -------------------------------- #
+pedalctl.QUIET = True          # no CLI-style response dumps in this section
+
+d = FakeDevice(["", "OK INFO fw=0.0.2 keys=M,0x1F,0x20 dirty=1\n"])
+check("api_info parses", pedalctl.api_info(d),
+      {"fw": "0.0.2", "keys": ["M", "0x1F", "0x20"], "dirty": True})
+d = FakeDevice(["", "OK SET 1=0x04\n"])
+check("api_info rejects stale", pedalctl.api_info(d), None)
+
+d = FakeDevice(["", "OK MAP M 0x1F 0x20\n"])
+check("api_map parses", pedalctl.api_map(d), ["M", "0x1F", "0x20"])
+d = FakeDevice(["", "OK MAP 0x1E 0x1F\n"])
+check("api_map truncated -> None", pedalctl.api_map(d), None)
+
+d = FakeDevice(["", "OK SET 2=0x2C\n"])
+check("api_set ok", pedalctl.api_set(d, 2, 0x2C), (True, "OK SET 2=0x2C"))
+d = FakeDevice(["", "OK SET 1=0x2C\n"])
+check("api_set stale wrong pedal -> False", pedalctl.api_set(d, 2, 0x2C)[0], False)
+d = FakeDevice(["", "ERR range\n"])
+check("api_set err -> False", pedalctl.api_set(d, 2, 0x68)[0], False)
+
+STEPS_SZC = [(0x02, 0x00), (0x00, 0x1D), (0x00, 0x06)]
+d = FakeDevice(["", "OK MAC 1 02:00,1D,06\n"])
+check("api_mac ok", pedalctl.api_mac(d, 1, STEPS_SZC, 15, 25),
+      (True, "OK MAC 1 02:00,1D,06", "02:00,1D,06"))
+d = FakeDevice(["", "ERR range\n"])
+check("api_mac device error -> False", pedalctl.api_mac(d, 1, [(0x02, 0)])[0], False)
+check("api_mac 7 steps -> client-side False",
+      pedalctl.api_mac(FakeDevice(["", ""]), 1, [(0x02, 0x1D)] * 7)[0], False)
+
+d = FakeDevice(["", "OK MAC 1 02:00,1D,06\n"])
+check("api_steps parses", pedalctl.api_steps(d, 1), [(2, 0), (0, 0x1D), (0, 6)])
+d = FakeDevice(["", "OK MAC 1 -\n"])
+check("api_steps none -> []", pedalctl.api_steps(d, 1), [])
+d = FakeDevice(["", "OK MAP M 0x1F 0x20\n"])
+check("api_steps stale -> None", pedalctl.api_steps(d, 1), None)
+
+d = FakeDevice(["", "OK MTIM 1 15 25\n"])
+check("api_timing query", pedalctl.api_timing(d, 1), (True, (15, 25), "OK MTIM 1 15 25"))
+d = FakeDevice(["", "OK MTIM 1 15 25\n"])
+check("api_timing set", pedalctl.api_timing(d, 1, 15, 25),
+      (True, (15, 25), "OK MTIM 1 15 25"))
+d = FakeDevice(["", "OK MTIM 1 15 26\n"])
+check("api_timing set wrong echo -> False", pedalctl.api_timing(d, 1, 15, 25)[0], False)
+
+d = FakeDevice(["", "OK saving\n", "OK saved\n"])
+check("api_save ok", pedalctl.api_save(d), (True, "OK saved"))
+d = FakeDevice(["", "OK saving\n"])
+check("api_save timeout", pedalctl.api_save(d, 2, 0.0),
+      (False, "timed out waiting for OK saved"))
+
+d = FakeDevice(["", "OK RESET\n"])
+check("api_reset ok", pedalctl.api_reset(d), (True, "OK RESET"))
+d = FakeDevice(["", "ERR syntax\n"])
+check("api_reset err -> False", pedalctl.api_reset(d)[0], False)
+
 print()
 print("FAILURES:", failures if failures else "none")
 sys.exit(1 if failures else 0)

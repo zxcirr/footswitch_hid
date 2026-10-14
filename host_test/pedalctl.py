@@ -94,6 +94,8 @@ DEFAULT_DELAY = 0.25
 PROBE_RETRIES = 4                # hidraw vendor-interface probe (sysfs unavailable)
 PROBE_DELAY = 0.05
 TARGET_HID_ID = "%08X:%08X" % (VENDOR_ID, PRODUCT_ID)   # "00001209:00000001"
+QUIET = False                    # True: suppress the CLI-style response dumps
+                                 # (the pedal_panel desktop app sets this)
 
 # --------------------------------------------------------------------------- #
 # Linux hidraw ioctls, computed with _IOC-equivalent arithmetic.
@@ -468,6 +470,8 @@ def unexpected_reply(text: str, expected: str) -> int:
 
 
 def show(raw: bytes, text: str) -> None:
+    if QUIET:
+        return          # desktop app sets QUIET = True; it logs parsed results
     print("响应 / response: %s" % (text if text else "(空 / empty)"))
     print("raw: %r" % (raw,))
 
@@ -1016,6 +1020,153 @@ def command_probe(device, retries: int, delay: float) -> int:
     print(_warn("请用 `--list` 检查 hidraw 节点/权限, 或稍后重试 `--probe` / inspect nodes & permissions "
                 "with `--list`, then retry `--probe`"))
     return 2
+
+
+# --------------------------------------------------------------------------- #
+# Programmatic API (used by the pedal_panel desktop app, see pedal_panel/).
+# Same wire protocol and strict reply matching as the CLI above, but returns
+# data / (ok, message) tuples instead of printing and exit codes.
+# --------------------------------------------------------------------------- #
+INFO_PARSE_RE = re.compile(
+    r"^OK\s+INFO\s+fw=(?P<fw>\S+)\s+keys=(?P<keys>\S+)\s+dirty=(?P<dirty>[01])(?:\s|$)",
+    re.IGNORECASE,
+)
+MAP_PARSE_RE = re.compile(
+    r"^OK\s+MAP\s+(?P<p1>\S+)\s+(?P<p2>\S+)\s+(?P<p3>\S+)(?:\s|$)", re.IGNORECASE)
+
+
+def api_info(device, retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Query firmware version / keymap / dirty flag.
+
+    -> {"fw": "0.0.2", "keys": ["M", "0x1F", "0x20"], "dirty": True} or None
+    when the reply does not match.
+    """
+    _raw, text = command_simple(device, "INFO", retries, delay)
+    match = INFO_PARSE_RE.match(text)
+    if not match:
+        return None
+    return {
+        "fw": match.group("fw"),
+        "keys": match.group("keys").split(","),
+        "dirty": match.group("dirty") == "1",
+    }
+
+
+def api_map(device, retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Query the three bindings: ["0x1E", "M", "0x00"] (code or "M"), or None."""
+    _raw, text = command_simple(device, "GET", retries, delay)
+    match = MAP_PARSE_RE.match(text)
+    if not match:
+        return None
+    return [match.group("p1"), match.group("p2"), match.group("p3")]
+
+
+def api_set(device, pedal: int, code: int,
+            retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Bind one pedal to a single key code (leaves macro mode)."""
+    _raw, text = command_simple(device, "SET %d 0x%02X" % (pedal, code), retries, delay)
+    if ERR_RE.match(text):
+        return False, text
+    if set_ok_re(pedal, code).match(text):
+        return True, text
+    return False, "unexpected reply: %s" % (text,)
+
+
+def api_mac(device, pedal: int, steps, press: int = None, gap: int = None,
+            retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Bind one pedal to a macro sequence ([(mask, key), ...]), optionally
+    including the per-step timing.  -> (ok, message, steps_body)."""
+    try:
+        command, body = build_mac_command(pedal, steps)
+    except ValueError as exc:
+        return False, str(exc), ""
+    if press is not None and gap is not None:
+        command += " %d %d" % (press, gap)
+    _raw, text = command_simple(device, command, retries, delay)
+    if ERR_RE.match(text):
+        return False, text, body
+    if mac_ok_re(pedal, body).match(text):
+        return True, text, body
+    return False, "unexpected reply: %s" % (text,), body
+
+
+def api_steps(device, pedal: int,
+              retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Query one pedal's macro steps.
+
+    -> [(mask, key), ...] (empty list = none stored), or None when the reply
+    does not match the protocol.
+    """
+    _raw, text = command_simple(device, "MGET %d" % pedal, retries, delay)
+    if not mac_ok_re(pedal).match(text):
+        return None
+    fields = text.split()
+    body = fields[3] if len(fields) > 3 else "-"
+    if body == "-":
+        return []
+    steps = []
+    for tok in body.split(","):
+        if ":" in tok:
+            m_str, _, k_str = tok.partition(":")
+            steps.append((int(m_str, 16), int(k_str, 16)))
+        else:
+            steps.append((0, int(tok, 16)))
+    return steps
+
+
+def api_timing(device, pedal: int, press: int = None, gap: int = None,
+               retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Query (press/gap None) or set the macro timing of one pedal.
+
+    -> (ok, (press_ms, gap_ms) or None, message)
+    """
+    if press is None:
+        command = "MTIM %d" % pedal
+        ok_re = mtim_ok_re(pedal)
+    else:
+        command = "MTIM %d %d %d" % (pedal, press, gap)
+        ok_re = mtim_ok_re(pedal, press, gap)
+    _raw, text = command_simple(device, command, retries, delay)
+    if ERR_RE.match(text):
+        return False, None, text
+    match = ok_re.match(text)
+    if not match:
+        return False, None, "unexpected reply: %s" % (text,)
+    fields = text.split()
+    try:
+        values = (int(fields[3]), int(fields[4]))
+    except (IndexError, ValueError):
+        return False, None, "unparsable timing: %s" % (text,)
+    return True, values, text
+
+
+def api_save(device, retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Persist the RAM config to flash, polling for "OK saved".
+    -> (ok, message).  Main-loop-stalling on the device (~40 ms)."""
+    placeholder = _current_buffer_text(device)
+    _raw, text = send_command(device, "SAVE", retries, delay, placeholder)
+    if ERR_RE.match(text):
+        return False, text
+    if SAVED_RE.match(text):
+        return True, text
+    for _ in range(max(1, retries)):
+        time.sleep(max(0.0, delay))
+        text = decode_text(normalize_response(device.get_feature()))
+        if ERR_RE.match(text):
+            return False, text
+        if SAVED_RE.match(text):
+            return True, text
+    return False, "timed out waiting for OK saved"
+
+
+def api_reset(device, retries: int = DEFAULT_RETRIES, delay: float = DEFAULT_DELAY):
+    """Restore all defaults (single mode, 1/2/3, default timing)."""
+    _raw, text = command_simple(device, "RESET", retries, delay)
+    if ERR_RE.match(text):
+        return False, text
+    if RESET_OK_RE.match(text):
+        return True, text
+    return False, "unexpected reply: %s" % (text,)
 
 
 # --------------------------------------------------------------------------- #

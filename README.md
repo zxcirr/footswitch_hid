@@ -21,6 +21,7 @@ footswitch_hid/
 │   ├── st_usbfs/   ST USB FS 设备库 V4.0.0
 │   └── cmsis/      CMSIS 内核与 STM32F10x 头文件
 ├── host_test/    主机侧测试与工具(Python + C)
+├── pedal_panel/  图形上位机(Tkinter, 键位/宏在线配置; 见其 README.md)
 ├── Makefile      构建 / 烧录 / 测试 / 调试入口
 └── .gitignore
 ```
@@ -38,6 +39,7 @@ footswitch_hid/
 | `app/cfg_flash.c` | 配置页(Flash 最后一页,64 字节 v2 镜像)读写与上电加载,自动迁移 v1 旧镜像 |
 | `lib/` | 第三方代码,**不要修改**:`st_usbfs` 为 USB 设备栈,`cmsis` 为内核头文件 |
 | `host_test/` | 主机侧工具与测试:描述符校验、命令单测、按键抓取、在线改键、端到端验收 |
+| `pedal_panel/` | 图形上位机(Tkinter):三踏板单键/宏/时序在线配置、捕获按键、保存到 Flash;`--self-test` 纯逻辑自测 |
 | `Makefile` | `make` / `make flash` / `make test` / `make debug` / `make clean` |
 
 ## 整体框架
@@ -102,6 +104,7 @@ gcc -std=c11 -Wall -Wextra -Wshadow -Iapp host_test/test_cmd.c app/cmd.c -o /tmp
 gcc -std=c11 -Wall -Wextra -Wshadow -Iapp host_test/test_macro.c app/macro.c -o /tmp/t && /tmp/t
 python3 host_test/test_pedalctl_semantics.py
 python3 host_test/test_descriptors.py
+python3 pedal_panel/pedal_panel.py --self-test   # 上位机纯逻辑自测(48 项,无需设备/显示)
 ```
 
 读取 `/dev/input/event*` 与 `/dev/hidraw*` 需要权限:`sudo usermod -aG input $USER`(重新登录后生效)。
@@ -165,6 +168,16 @@ uv run python win_remap.py get && uv run python win_remap.py save
 ```
 
 > Windows/macOS 需要 `hidapi`(已按平台在 `pyproject.toml` 声明,`uv` 会自动安装);Linux 上可回退到 `/dev/hidraw`,无需安装。
+
+**7. 图形上位机(Tkinter, Windows/Linux)**
+
+```bash
+cd pedal_panel
+uv run python pedal_panel.py          # 或 pip install hidapi && python pedal_panel.py
+python3 pedal_panel.py --self-test    # 纯逻辑自测(48 项; 无需设备/显示/tkinter)
+```
+
+界面:三个踏板各自 单键/宏 模式、键位下拉 + 「捕获按键」(点一下再按物理键自动填 HID 码)、宏步骤编辑(增删改/排序/组合步)、每踏板时序(press/gap ms)、底栏 读取/全部应用/保存到 Flash/恢复默认,顶栏显示固件版本与未保存(dirty)状态。设计/开发文档见 `pedal_panel/README.md`。
 
 ## 待补充
 

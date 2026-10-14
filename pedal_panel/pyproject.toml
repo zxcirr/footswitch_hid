@@ -1,0 +1,12 @@
+[project]
+name = "footswitch-pedal-panel"
+version = "0.0.2"
+description = "FootSwitch 踏板上位机 (Tkinter): 在线配置键位 / 宏 / 时序 / 持久化"
+requires-python = ">=3.9"
+# hidapi 只在 Windows / macOS 需要; Linux 上 pedalctl.py 会回退到 /dev/hidraw ioctl
+dependencies = [
+  "hidapi>=0.14.0; sys_platform == 'win32'",
+]
+
+[tool.uv]
+package = false
