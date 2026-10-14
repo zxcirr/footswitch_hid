@@ -6,7 +6,7 @@ Device / 设备
     VID 0x1209, PID 0x0001.  Two USB HID interfaces (QMK/VIA-style layout):
       * interface 0 = boot keyboard: own 63-byte report descriptor with a
         single top-level keyboard collection, EP1 IN (8 bytes, 1 ms);
-      * interface 1 = vendor HID: own 19-byte report descriptor with a single
+      * interface 1 = vendor HID: own 21-byte report descriptor with a single
         top-level usage page 0xFF00 / usage 0x01 collection carrying the
         48-byte Feature report, EP2 IN (8 bytes, 1 ms, never transmits).
     Each interface is its own HID device object; the Feature channel lives on
@@ -179,7 +179,7 @@ EPILOG = """\
 
 设备 / device:
   两个 USB HID 接口: 接口0 = boot 键盘 (63 字节报告描述符, 无 0xFF00);
-  接口1 = 厂商 HID (19 字节报告描述符, usage page 0xFF00/usage 0x01,
+  接口1 = 厂商 HID (21 字节报告描述符, usage page 0xFF00/usage 0x01,
   48 字节 Feature 报告)。Linux 下会出现两个 HID_ID 相同的 /dev/hidraw* 节点,
   本工具通过 sysfs report_descriptor 是否含 0xFF00 选择厂商节点 (读不到时
   用 INFO Feature 请求探测); --list 会标出哪个节点是厂商接口。

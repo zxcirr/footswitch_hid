@@ -26,7 +26,7 @@
 #define CUSTOMHID_SIZ_DEVICE_DESC               18
 #define CUSTOMHID_SIZ_CONFIG_DESC               59
 #define CUSTOMHID_SIZ_REPORT_DESC               63     /* interface 0: boot keyboard */
-#define CUSTOMHID_SIZ_VENDOR_REPORT_DESC        19     /* interface 1: 48-byte Feature */
+#define CUSTOMHID_SIZ_VENDOR_REPORT_DESC        21     /* interface 1: 48-byte Feature + its own Usage */
 #define CUSTOMHID_SIZ_STRING_LANGID             4
 #define CUSTOMHID_SIZ_STRING_VENDOR             22
 #define CUSTOMHID_SIZ_STRING_PRODUCT            20

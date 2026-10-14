@@ -6,7 +6,7 @@ of ROOT/src/config.h (ROOT is the parent of this script's directory), then check
 them against the two-interface QMK/VIA-style layout:
 
   device_desc : 18 bytes, bLength=18, bDescriptorType=1, bcdUSB=0x0110,
-                bcdDevice=0x0003 (displayed 0.03; the revision was bumped so
+                bcdDevice=0x0004 (displayed 0.04; the revision was bumped so
                 Windows re-reads its cached descriptors), bDeviceClass=0,
                 bMaxPacketSize0=64, idVendor=0x1209, idProduct=0x0001,
                 bNumConfigurations=1, iManufacturer=1, iProduct=2,
@@ -18,23 +18,26 @@ them against the two-interface QMK/VIA-style layout:
                     HID descriptor with wDescriptorLength=63,
                     endpoint 0x81 interrupt / 8 bytes / 1 ms;
                   interface 1 (vendor HID): class 3/sub 0/proto 0, 1 endpoint,
-                    HID descriptor with wDescriptorLength=19,
+                    HID descriptor with wDescriptorLength=21,
                     endpoint 0x82 interrupt / 8 bytes / 1 ms.
                 The walk must end exactly at wTotalLength.
   two_interfaces : both interfaces present, each with exactly one HID descriptor
                 and one interrupt IN endpoint, and each HID descriptor's
                 wDescriptorLength matching its own report descriptor array's
-                length (63 keyboard / 19 vendor).  Windows parses HID per USB
+                length (63 keyboard / 21 vendor).  Windows parses HID per USB
                 interface, so each interface must be a self-consistent HID device.
   report_desc : parses CustomHID_ReportDescriptor (63 bytes): HID 1.11 appendix
                 B.1 boot keyboard; top-level Usage Page(0x01)/Usage(0x06)/
                 Collection(0x01), at least one Input item, 64 input bits (byte
                 aligned), last item End Collection, collections balanced, and no
                 Report ID items.
-  vendor_feature : parses CustomHID_VendorReportDescriptor (19 bytes): Usage
+  vendor_feature : parses CustomHID_VendorReportDescriptor (21 bytes): Usage
                 Page 0xFF00 / Usage 0x01, exactly one Application collection,
                 a Feature main item (0xB1) with Report Size 8, Report Count 48
-                (384 bits) and the Data flag (bit0) set, and no Report ID items.
+                (384 bits) and the Data flag (bit0) set, a Usage of its OWN
+                before that Feature item (the collection's Usage is consumed by
+                the Collection; Windows rejects a data main item without usage:
+                0xC00000B9 -> MI_01 Code 10), and no Report ID items.
   single_tlc  : BOTH report descriptors: exactly one top-level Application
                 collection (0xA1 0x01 at nesting depth 0) and NO Report ID items
                 (0x85) anywhere.  Windows HidUsb rejects a report descriptor
@@ -69,7 +72,7 @@ ARRAY_RE = re.compile(
 KEYBOARD_REPORT_NAME = "CustomHID_ReportDescriptor"
 VENDOR_REPORT_NAME = "CustomHID_VendorReportDescriptor"
 KEYBOARD_REPORT_LEN = 63
-VENDOR_REPORT_LEN = 19
+VENDOR_REPORT_LEN = 21
 CONFIG_LEN = 59
 
 N_CHECKS = 8  # device_desc, config_desc, two_interfaces, report_desc, vendor_feature, single_tlc, keymap, strings
@@ -200,15 +203,15 @@ def check_device_desc(arrays):
     check_u8(arr, 7, "bMaxPacketSize0", 64, problems)
     check_le16(arr, 8, "idVendor", 0x1209, problems)
     check_le16(arr, 10, "idProduct", 0x0001, problems)
-    # bcdDevice 0.03 = BCD 0x0003, stored little-endian as bytes {03,00}
-    check_le16(arr, 12, "bcdDevice", 0x0003, problems)
+    # bcdDevice 0.04 = BCD 0x0004, stored little-endian as bytes {04,00}
+    check_le16(arr, 12, "bcdDevice", 0x0004, problems)
     check_u8(arr, 17, "bNumConfigurations", 1, problems)
     check_u8(arr, 14, "iManufacturer", 1, problems)
     check_u8(arr, 15, "iProduct", 2, problems)
     check_u8(arr, 16, "iSerialNumber", 0, problems)
     if problems:
         return False, "%s: %s" % (arr.name, "; ".join(problems)), {}
-    return True, ("%s[18]: USB FS device descriptor, 1209:0001, bcdDevice=0.03, "
+    return True, ("%s[18]: USB FS device descriptor, 1209:0001, bcdDevice=0.04, "
                   "iManufacturer=1 iProduct=2 iSerialNumber=0") % arr.name, {}
 
 
@@ -384,7 +387,7 @@ def check_two_interfaces(arrays, cfg_extra):
     """Both interfaces self-consistent: 1 HID + 1 interrupt IN EP each.
 
     Each HID descriptor's wDescriptorLength must match its own report
-    descriptor array (interface 0 -> 63-byte keyboard, interface 1 -> 19-byte
+    descriptor array (interface 0 -> 63-byte keyboard, interface 1 -> 21-byte
     vendor).  Windows parses HID per USB interface, so each interface is its
     own HID device.
     """
@@ -592,6 +595,7 @@ def check_vendor_feature(arrays):
     top_app_collections = 0
     report_ids = 0
     usage_page = usage = None
+    usage_pending = 0        # local-pool usages not yet consumed by a main item
     report_size = report_count = 0
     saw_vendor_usage_page = saw_vendor_usage = False
     feature = None
@@ -610,10 +614,12 @@ def check_vendor_feature(arrays):
         elif btype == BTYPE_LOCAL:
             if btag == TAG_USAGE:
                 usage = value
+                usage_pending += 1
                 if usage_page == VENDOR_USAGE_PAGE and value == VENDOR_USAGE:
                     saw_vendor_usage = True
         elif btype == BTYPE_MAIN:
             if btag == TAG_COLLECTION:
+                usage_pending = max(0, usage_pending - 1)   # Collection consumes one usage
                 if depth == 0 and value == 0x01:
                     top_app_collections += 1
                 depth += 1
@@ -622,7 +628,8 @@ def check_vendor_feature(arrays):
                 if depth < 0:
                     depth = 0
             elif btag == TAG_FEATURE and feature is None:
-                feature = (off, report_size, report_count, value)
+                feature = (off, report_size, report_count, value, usage_pending > 0)
+                usage_pending = max(0, usage_pending - 1)
 
     if not saw_vendor_usage_page:
         problems.append("no Usage Page 0xFF00 item in the report descriptor")
@@ -634,7 +641,13 @@ def check_vendor_feature(arrays):
     if feature is None:
         problems.append("no Feature item (0xB1) in the report descriptor")
     else:
-        off, fsize, fcount, flags = feature
+        off, fsize, fcount, flags, had_usage = feature
+        if not had_usage:
+            problems.append(
+                "Feature item at offset %d has no Usage of its own (the "
+                "collection's Usage was consumed by the Collection) - Windows "
+                "rejects a data main item without usage: 0xC00000B9 -> MI_01 "
+                "Code 10, the vendor interface never starts" % off)
         if fsize != 8:
             problems.append("Feature Report Size=%d want 8 at offset %d" % (fsize, off))
         if fcount != 48:
@@ -649,7 +662,8 @@ def check_vendor_feature(arrays):
     if problems:
         return False, "%s[%d]: %s" % (name, len(arr), "; ".join(problems)), {}
     return True, ("%s[%d]: vendor Feature report, Usage Page 0xFF00 / Usage 0x01 in its own "
-                  "Application collection, 8 bits x 48 = 48 bytes, no report IDs"
+                  "Application collection, Feature with its own Usage, 8 bits x 48 = 48 bytes, "
+                  "no report IDs"
                   % (name, len(arr))), {}
 
 

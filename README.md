@@ -45,7 +45,7 @@ footswitch_hid/
 ## 整体框架
 
 - **分层**:`src/`(产品逻辑)→ `app/`(USB 应用层)→ `lib/`(USB 设备栈 + CMSIS);`lib/` 不感知产品逻辑,可整体替换。
-- **USB 形态**:以 HID 设备枚举,**两个 USB 接口**(每个接口各自只含一个顶层 Application 集合,均无 report ID):**接口 0 = boot 键盘**(class 3/sub 1/proto 1,自有 63 字节报告描述符,EP1 中断 IN 8B);**接口 1 = 厂商 HID**(class 3/sub 0/proto 0,自有 19 字节报告描述符,usage page 0xFF00 的 48 字节 Feature 通道,EP2 中断 IN 8B 永不发送、仅回 NAK)。Windows HidUsb 按**接口**解析 HID:每个接口各自单集合,因此无需 report ID(多顶层集合且无 report ID 会被拒绝,STATUS_COULD_NOT_INTERPRET);厂商集合因此成为独立 HID 设备对象,hidapi/hidraw 可正常打开(无需 `\KBD` 之类 hack);设备版本(bcdDevice)为 **0.03**。
+- **USB 形态**:以 HID 设备枚举,**两个 USB 接口**(每个接口各自只含一个顶层 Application 集合,均无 report ID):**接口 0 = boot 键盘**(class 3/sub 1/proto 1,自有 63 字节报告描述符,EP1 中断 IN 8B);**接口 1 = 厂商 HID**(class 3/sub 0/proto 0,自有 21 字节报告描述符,usage page 0xFF00 的 48 字节 Feature 通道——Feature 数据项带自己的 Usage 0x01,因为集合的 Usage 会被 Collection 项消耗,Windows 拒绝无 Usage 的数据主项;EP2 中断 IN 8B 永不发送、仅回 NAK)。Windows HidUsb 按**接口**解析 HID:每个接口各自单集合,因此无需 report ID(>1 顶层集合无 report ID、或数据主项缺 Usage,都会被 0xC00000B9 拒绝);厂商集合因此成为独立 HID 设备对象,hidapi/hidraw 可正常打开(无需 `\KBD` 之类 hack);设备版本(bcdDevice)为 **0.04**(改描述符必须同时 bump 此版本,否则 Windows 复用按 REV_xxxx 缓存的旧解析结果)。
 - **主循环**:`main.c` 每 1ms 采样 PB9/PB8/PB7(内部上拉、按下为低电平),积分消抖后把按键填入 8 字节键盘报告,仅在内容变化时发送。
 - **改键数据流**:主机 `Set_Report(Feature)` → `app/usb_prop.c` 收帧 → `app/cmd.c` 解析并更新 RAM 配置 → 键盘报告立即使用新键码/新宏;`SAVE` 才由主循环写入 Flash。
 - **宏播放**:每个踏板可绑定 1..6 步序列(如 `Shift→Z→C`);踩住期间 `app/macro.c` 循环「按住当前步 press 毫秒 → 全部松开 gap 毫秒 → 下一步」(默认各 30ms,可在线配置),**松开踏板立即释放全部按键**(不卡键);宏踏板与单键踏板可同时踩,贡献合并进同一 8 字节报告(修饰键相 OR、键入 6 键槽)。
