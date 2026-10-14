@@ -1,3 +1,21 @@
+# 构建产物 (make clean 会删 build/, 这里兜底)
 build/
-__pycache__/
 *.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.dis
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+uv.lock
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

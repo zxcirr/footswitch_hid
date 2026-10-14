@@ -281,20 +281,20 @@ def run_async(self, fn, on_done):
 
 ---
 
-## 9. 实现里程碑（建议顺序）
+## 9. 实现里程碑
 
-> 2026-10-13 状态：**M1–M7 代码全部完成并通过自动化验证**（`--self-test` 48 项、api 语义 20 项、`make test` 全绿）。
-> 其中带 □ 的判据需要 **Windows 真机交互**（本开发容器无显示/无 tkinter/无设备），按第 10.2 节清单执行。
+> 代码与自动化验证已全部完成（`--self-test` 48 项、api 语义 20 项、`make test` 全绿；
+> Windows 侧连接/枚举/CLI 读写已于 2026-10-14 实机通过, MI_01 Status OK）。
+> GUI 逐项交互按 §10.2 清单收尾。
 
-| 里程碑 | 内容 | 完成判据 | 状态 |
-|---|---|---|---|
-| M1 | pedalctl.py 数据层 | 伪设备实测全过 | ✅ |
-| M2 | `pyproject.toml` + 窗口骨架 + 连接/状态/dirty/日志 + 读取 | Windows 上能读回三个踏板配置 | 代码 ✅ / □ 真机 |
-| M3 | 单键：combobox + 应用（api_set）| 改踏板 1 为 `a`，踩踏有输入 | 代码 ✅ / □ 真机 |
-| M4 | 宏：Listbox + StepDialog + api_mac（含长度回退）| `mac 1 shift z c` 等价操作，循环输入正常 | 代码 ✅ / □ 真机 |
-| M5 | 捕获按键（6.1–6.3）+ StepDialog 内捕获 | 点捕获、按 z，自动填 `z` | 代码 ✅ / □ 真机 |
-| M6 | save / reset / 时序 Spinbox / `--self-test` | 保存重启后保留；reset 恢复 1/2/3 | 代码 ✅ / □ 真机 |
-| M7 | README 回写主 README + 收尾 | — | ✅ |
+| 里程碑 | 内容 | 完成判据 |
+|---|---|---|
+| M1 | pedalctl.py 数据层（api_* + QUIET）| 伪设备实测 |
+| M2 | `pyproject.toml` + 窗口骨架 + 连接/状态/dirty/日志 + 读取 | 读回三踏板配置 |
+| M3 | 单键：combobox + 应用（api_set）| 改键后踩踏板输出对应字符 |
+| M4 | 宏：Listbox + StepDialog + api_mac（含 47 字符长度回退）| 三独立步/和弦步循环正常 |
+| M5 | 捕获按键（§6.1–6.3）+ StepDialog 内捕获 | 按物理键自动填码 |
+| M6 | save / reset / 时序 Spinbox / `--self-test` | 保存重启保留；reset 回 1/2/3 |
 
 ---
 
@@ -323,6 +323,28 @@ python3 host_test/test_pedalctl_semantics.py       # 现有语义测试保持绿
 □ 交换机/分屏/dpi 缩放下窗口不破版（moved：用 grid+padding，别写死像素）
 ```
 
+### 10.3 Windows 部署速查与故障排查
+
+前置：python.org 版 Python 3.9+（自带 tkinter）；把 `pedal_panel/` 整目录拷到 Windows 即可。
+
+```powershell
+cd D:\...\pedal_panel
+uv sync                      # 或 pip install hidapi; hardlink warning 无害(UV_LINK_MODE=copy 可消)
+uv run python pedal_panel.py
+```
+
+首连预期：绿灯、`fw 0.0.2`、键位 `0/-/=`（板载 v1 旧配置自动迁移所致）、右上 dirty 红点；点「保存到 Flash」固化为 v2。
+
+| 症状 | 原因 | 解决 |
+|---|---|---|
+| `ModuleNotFoundError: fcntl` | 拷贝的 `pedalctl.py` 过旧 | 重拷 pedal_panel / `git pull` |
+| `No module named tkinter` | 非 python.org 版 Python | 换官方安装包并勾选 tcl/tk |
+| 只枚举到 `interface_number=0` / MI_01 Code 10 | 固件过旧（Feature 无独立 Usage）或混编产物（宣告 21 实回 19） | 烧 bcdDevice≥0.05 的干净构建；改描述符必 bump revision |
+| 红灯 + “未找到厂商 HID 条目” | 板子 USB 未插 / 仅充电线 / 未枚举 | 设备管理器找 1209:0001；`uv run python win_remap.py` 诊断 |
+| 保存超时 | 设备正忙擦写 / 两个上位机同开 | 稍候重试；保持单实例 |
+| 重启后配置丢失 | 只“应用”未“保存” | 应用只写 RAM，必须保存到 Flash |
+| `ERR syntax` / `ERR range` | 超出协议约束 | 见第 6/7 节与 `app/cmd.h` 契约 |
+
 ---
 
 ## 11. 坑与注意事项
@@ -337,7 +359,7 @@ python3 host_test/test_pedalctl_semantics.py       # 现有语义测试保持绿
 
 ---
 
-## 12. 设计决策（已按第 13 节实现，如需变更告诉我）
+## 12. 设计决策（v1 已实现）
 
 | # | 问题 | 实现选择 |
 |---|---|---|
@@ -348,9 +370,9 @@ python3 host_test/test_pedalctl_semantics.py       # 现有语义测试保持绿
 
 ---
 
-## 13. 附：当前仓库状态（2026-10-13 实现完毕）
+## 13. 项目现状
 
-- `pedal_panel/`：**完全自包含**（GUI + CLI + 协议核心 + 文档），整体拷贝这一个目录到 Windows 即可运行；自动化验证 ✅（`--self-test` 48 项 + 伪设备 api 语义 20 项），真机交互待按 10.2 清单在 Windows 完成
-- `host_test/pedalctl.py`：已迁移至 `pedal_panel/pedalctl.py`（单一副本，`host_test` 的测试从 ../pedal_panel 导入，避免两份代码漂移）
-- 固件：宏功能完整（`mac/mget/tim` 协议 + `app/macro.c` 引擎），cmd 140 / macro 44 项单测绿；已通过 DAPLink 烧录并经 SWD 端到端验证（v1→v2 迁移、单键输出、宏三相位循环全部实测）
-- 远程 GitHub：`zxcirr/footswitch_hid` 单 `master` 分支（默认分支），干净单项目历史
+- `pedal_panel/`：自包含上位机目录（GUI `pedal_panel.py` + CLI `pedalctl.py` / `win_remap.py` + 本文档），整体拷贝即可在 Windows 运行
+- `host_test/`：纯测试目录（描述符 8 项 / cmd 140 / macro 44 / pedalctl 语义含 api 层 / qa_e2e·evdev 真机工具）
+- 固件：宏功能 + 描述符修复完成；板上固件与仓库构建逐字节一致（注释级改动不触发重烧），Windows 侧已实机验证：REV_0005、MI_00/MI_01 均 OK、`GET` 返回 `0x27 0x2D 0x2E`（板载 v1 迁移配置，dirty=1 属预期）
+- 仓库：GitHub `zxcirr/footswitch_hid` 单 `master` 分支（默认），与本地同步

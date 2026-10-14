@@ -12,23 +12,18 @@
   *   - interface 1: vendor HID (class 3 / subclass 0 / protocol 0),
   *     1 interrupt IN endpoint (0x82, 8 bytes, 1 ms, never transmits),
   *     21-byte report descriptor with ONE top-level Application collection
-  *     (Usage Page 0xFF00 / Usage 0x01 / Feature 8 bits x 48).  The Feature
-  *     data item carries its own Usage 0x01: the collection's Usage is
-  *     consumed by the Collection item, and Windows' HID parser rejects a
-  *     data (non-Constant) main item without a usage of its own
-  *     (STATUS_HID_DESCRIPTOR_PARSING_FAILURE 0xC00000B9 -> MI_01 Code 10,
-  *     the vendor interface never starts and hidapi only sees the keyboard).
-  *     An earlier 0xC00000B9 was caused by >1 top-level collection without
-  *     report IDs; that stays avoided via one-collection-per-interface.
+  *     (Usage Page 0xFF00 / Usage 0x01 / Feature 8 bits x 48, with its own
+  *     Usage).  Windows rules - violations return 0xC00000B9 (MI_01 Code 10):
+  *     one top-level collection per interface unless fields carry report IDs,
+  *     and every data (non-Constant) main item needs its own Usage (a
+  *     Collection consumes the preceding one).
   *   - no report IDs anywhere; the vendor collection is its own HID device
   *     object (Shared access, no \KBD hack)
-  *   - bcdDevice = 0.05 (rev bump: Windows caches parsed descriptors per
-  *     hardware ID USB\VID_1209&PID_0001&REV_xxxx. REV_0003 held the
-  *     usage-less Feature item; REV_0004 shipped TRUNCATED (link-time mix of
-  *     a fresh usb_desc.o with a stale usb_prop.o whose ONE_DESCRIPTOR still
-  *     answered 19 bytes for the 21-byte report). Both caches must be busted
-  *     by a new revision; header changes without `make clean` are now caught
-  *     by the Makefile's -MMD dependency tracking)
+  *   - bcdDevice = 0.05: Windows caches parsed descriptors per
+  *     USB\VID_1209&PID_0001&REV_xxxx, so ALWAYS bump this revision when
+  *     descriptor content changes, and full-rebuild after editing headers
+  *     (the report length compiles into two TUs: this file and the
+  *     ONE_DESCRIPTOR in usb_prop.c; Makefile -MMD tracks the dependency)
   *   - string descriptors: LANGID 0x0409, "FootSwitch" + "HID Pedal" (no serial)
   ******************************************************************************
   */
@@ -36,10 +31,8 @@
 #include "usb_lib.h"
 #include "usb_desc.h"
 
-/* USB Standard Device Descriptor.
- * bcdDevice = 0x0005 ("0.05"): Windows caches the parsed descriptors per
- * hardware ID (USB\VID_1209&PID_0001&REV_xxxx); every descriptor-content fix
- * MUST bump this revision or Windows keeps reusing the cached (failed) parse. */
+/* USB Standard Device Descriptor (bcdDevice 0x0005 - see the rev-bump rule
+ * in the file header). */
 const uint8_t CustomHID_DeviceDescriptor[CUSTOMHID_SIZ_DEVICE_DESC] =
 {
   0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x40,
@@ -82,12 +75,10 @@ const uint8_t CustomHID_ReportDescriptor[CUSTOMHID_SIZ_REPORT_DESC] =
   0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0
 };
 
-/* HID Report Descriptor for interface 1 (21 bytes): vendor-defined 48-byte
- * Feature report in its own single top-level Application collection
- * (usage page 0xFF00, usage 0x01), no report IDs.  The Feature data item
- * gets its OWN Usage (0x09, 0x01) before 0xB1: the first Usage is consumed
- * by the Collection, and a data main item without a usage is rejected by
- * Windows' HID parser (0xC00000B9 -> MI_01 Code 10). */
+/* HID Report Descriptor for interface 1 (21 bytes): one 48-byte Feature in
+ * its own Application collection (Usage Page 0xFF00 / Usage 0x01); the
+ * 0x09, 0x01 before 0xB1 is the Feature item's own Usage (Windows rule -
+ * see file header). */
 const uint8_t CustomHID_VendorReportDescriptor[CUSTOMHID_SIZ_VENDOR_REPORT_DESC] =
 {
   0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x15,
