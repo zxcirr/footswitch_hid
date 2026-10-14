@@ -328,47 +328,55 @@ class PedalFrame(_UI_FRAME_BASE):
     # -- widgets ----------------------------------------------------------- #
 
     def _build(self):
-        ttk.Label(self, text="模式 / mode:").grid(row=0, column=0, sticky="w")
-        self.mode_var = tk.StringVar(value="single")
-        ttk.Radiobutton(self, text="单键 single", value="single",
-                        variable=self.mode_var,
-                        command=self._mode_changed).grid(row=0, column=1, sticky="w")
-        ttk.Radiobutton(self, text="宏 macro (踩住循环 / cycle while held)",
-                        value="macro", variable=self.mode_var,
-                        command=self._mode_changed).grid(row=0, column=2, sticky="w")
+        self.columnconfigure(1, weight=1)
 
-        ttk.Label(self, text="键位 / key:").grid(row=1, column=0, sticky="w", pady=3)
+        # r0: 模式 (radio 并排, 宏=踩住循环步骤; 详见 README)
+        modes = ttk.Frame(self)
+        self.mode_var = tk.StringVar(value="single")
+        ttk.Radiobutton(modes, text="单键 single", value="single",
+                        variable=self.mode_var,
+                        command=self._mode_changed).pack(side="left")
+        ttk.Radiobutton(modes, text="宏 macro", value="macro",
+                        variable=self.mode_var,
+                        command=self._mode_changed).pack(side="left", padx=(10, 0))
+        modes.grid(row=0, column=0, columnspan=2, sticky="w")
+
+        # r1: 单键: 下拉 + 捕获
         self.key_var = tk.StringVar(value=SINGLE_BY_CODE.get(0x1E, SINGLE_LABELS[0]))
         self.key_combo = ttk.Combobox(self, textvariable=self.key_var,
-                                      values=SINGLE_LABELS, width=24, state="readonly")
-        self.key_combo.grid(row=1, column=1, sticky="w")
-        ttk.Button(self, text="捕获按键 / capture",
-                   command=self.start_capture).grid(row=1, column=2, sticky="w")
+                                      values=SINGLE_LABELS, width=16, state="readonly")
+        self.key_combo.grid(row=1, column=0, sticky="we", pady=2)
+        ttk.Button(self, text="捕获", command=self.start_capture).grid(
+            row=1, column=1, sticky="e")
 
-        ttk.Label(self, text="宏步骤 / steps:").grid(row=2, column=0, sticky="nw", pady=3)
-        self.step_list = tk.Listbox(self, height=4, width=36, exportselection=False)
-        self.step_list.grid(row=2, column=1, rowspan=5, sticky="nw")
+        # r2-3: 宏步骤列表 + 编辑按钮(2行x3列网格, 省高度)
+        self.step_list = tk.Listbox(self, height=5, width=22, exportselection=False)
+        self.step_list.grid(row=2, column=0, rowspan=2, sticky="ns", pady=2)
         self.step_btns = ttk.Frame(self)
-        for text, cmd in (("添加 add", self.add_step),
-                          ("编辑 edit", self.edit_step),
-                          ("删除 delete", self.del_step),
-                          ("上移 up", lambda: self.move_step(-1)),
-                          ("下移 down", lambda: self.move_step(1))):
-            ttk.Button(self.step_btns, text=text, command=cmd).pack(fill="x", pady=1)
-        self.step_btns.grid(row=2, column=2, rowspan=5, sticky="nw")
+        for i, (text, cmd) in enumerate((("添加", self.add_step),
+                                         ("编辑", self.edit_step),
+                                         ("删除", self.del_step),
+                                         ("上移", lambda: self.move_step(-1)),
+                                         ("下移", lambda: self.move_step(1)))):
+            ttk.Button(self.step_btns, text=text, command=cmd, width=5).grid(
+                row=i // 3, column=i % 3, sticky="nsew", padx=1, pady=1)
+        self.step_btns.grid(row=2, column=1, rowspan=2, sticky="n", padx=(4, 0), pady=2)
 
-        ttk.Label(self, text="宏时序 / timing (ms):").grid(row=8, column=0, sticky="w", pady=3)
-        ttk.Label(self, text="按下 press").grid(row=8, column=1, sticky="w")
+        # r4: 宏时序(一行) + 应用
+        timing = ttk.Frame(self)
         self.press_var = tk.StringVar(value=str(DEFAULT_PRESS_MS))
-        ttk.Spinbox(self, from_=1, to=pedalctl.MACRO_TIME_MAX, width=6,
-                    textvariable=self.press_var).grid(row=8, column=2, sticky="w")
-        ttk.Label(self, text="间隔 gap").grid(row=9, column=1, sticky="w")
         self.gap_var = tk.StringVar(value=str(DEFAULT_GAP_MS))
-        ttk.Spinbox(self, from_=1, to=pedalctl.MACRO_TIME_MAX, width=6,
-                    textvariable=self.gap_var).grid(row=9, column=2, sticky="w")
+        ttk.Label(timing, text="按下").pack(side="left")
+        ttk.Spinbox(timing, from_=1, to=pedalctl.MACRO_TIME_MAX, width=4,
+                    textvariable=self.press_var).pack(side="left", padx=(2, 8))
+        ttk.Label(timing, text="间隔").pack(side="left")
+        ttk.Spinbox(timing, from_=1, to=pedalctl.MACRO_TIME_MAX, width=4,
+                    textvariable=self.gap_var).pack(side="left", padx=(2, 8))
+        ttk.Label(timing, text="ms").pack(side="left")
+        timing.grid(row=4, column=0, sticky="w", pady=2)
+        ttk.Button(self, text="应用 apply", command=self.apply).grid(
+            row=4, column=1, sticky="e")
 
-        ttk.Button(self, text="应用到设备 / apply", command=self.apply).grid(
-            row=10, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self._mode_changed()
 
     def _mode_changed(self):
@@ -494,7 +502,7 @@ class App(_UI_APP_BASE):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.minsize(760, 600)
+        self.minsize(940, 480)
         self.device = None
         self.hid = pedalctl.load_hidapi()
         self.capture_frame = None
@@ -510,25 +518,26 @@ class App(_UI_APP_BASE):
         top.pack(fill="x")
         self.led = tk.Canvas(top, width=14, height=14, highlightthickness=0)
         self.led.create_oval(2, 2, 12, 12, fill="#c0392b", outline="", tags="dot")
-        self.led.grid(row=0, column=0, padx=(0, 6))
+        self.led.pack(side="left", padx=(0, 6))
+        ttk.Button(top, text="重新连接 / reconnect",
+                   command=self.connect).pack(side="right")
         self.status_var = tk.StringVar(value="未连接 / not connected")
-        ttk.Label(top, textvariable=self.status_var, anchor="w").grid(
-            row=0, column=1, sticky="ew")
-        ttk.Button(top, text="重新连接 / reconnect", command=self.connect).grid(
-            row=0, column=2, padx=4)
+        ttk.Label(top, textvariable=self.status_var).pack(side="left")
         self.info_var = tk.StringVar(value="")
-        ttk.Label(top, textvariable=self.info_var, anchor="w").grid(
-            row=1, column=1, sticky="ew")
+        ttk.Label(top, textvariable=self.info_var).pack(side="left", padx=(16, 0))
         self.dirty_var = tk.StringVar(value="")
-        self.dirty_label = ttk.Label(top, textvariable=self.dirty_var, anchor="e",
+        self.dirty_label = ttk.Label(top, textvariable=self.dirty_var,
                                      foreground="#c0392b")
-        self.dirty_label.grid(row=1, column=2, sticky="e")
-        top.columnconfigure(1, weight=1)
+        self.dirty_label.pack(side="left", padx=(16, 0))
 
+        # 三踏板横排: 用宽度换高度
+        body = ttk.Frame(self)
+        body.pack(fill="x", padx=8)
         self.frames = []
-        for index in (1, 2, 3):
-            frame = PedalFrame(self, index, self)
-            frame.pack(fill="x", padx=8, pady=4)
+        for i, index in enumerate((1, 2, 3)):
+            frame = PedalFrame(body, index, self)
+            frame.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 4, 0))
+            body.columnconfigure(i, weight=1)
             self.frames.append(frame)
 
         bar = ttk.Frame(self, padding=(8, 4))
@@ -539,8 +548,8 @@ class App(_UI_APP_BASE):
                           ("恢复默认 / reset", self.reset)):
             ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=3)
 
-        self.log_text = tk.Text(self, height=9, wrap="word", state="disabled")
-        self.log_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        self.log_text = tk.Text(self, height=6, wrap="word", state="disabled")
+        self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
     # -- status / log -------------------------------------------------------- #
 
