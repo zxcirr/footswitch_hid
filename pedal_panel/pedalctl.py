@@ -76,12 +76,16 @@ from __future__ import annotations
 import argparse
 import ctypes
 import errno
-import fcntl
 import glob
 import os
 import re
 import sys
 import time
+
+try:
+    import fcntl        # POSIX-only: Linux /dev/hidraw ioctl 后备通道
+except ImportError:     # Windows 等平台没有 fcntl: 走 hidapi, hidraw 路径被禁用
+    fcntl = None
 
 VENDOR_ID = 0x1209
 PRODUCT_ID = 0x0001
@@ -777,6 +781,11 @@ def _open_via_hidapi(hid_module):
 
 
 def _open_via_hidraw():
+    if fcntl is None:      # Windows/macOS 无 hidraw: 必须使用 hidapi (pip install hidapi)
+        print(_err("本平台无 /dev/hidraw 后备通道(缺 fcntl), 必须安装 hidapi / "
+                   "no hidraw fallback on this platform: hidapi is required"))
+        print(HINT_NOT_FOUND)
+        return None, 2
     nodes = find_hidraw_nodes()
     if not nodes:
         print(_err("未找到 footswitch 设备 / device not found (VID 0x%04X / PID 0x%04X)."
